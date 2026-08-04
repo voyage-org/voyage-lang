@@ -141,7 +141,7 @@ voyage-lang is currently in its design phase and evolving quickly. Design discus
 
 ## License
 
-*(TBD — add license before first public release.)
+[MIT LICENSE](LICENSE)
 
 ---
 
