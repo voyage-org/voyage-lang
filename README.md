@@ -2,6 +2,8 @@
 
 > A standalone, curiosity-driven programming language targeting the .NET runtime.
 
+![Voyage lang logo](http://raw.githubusercontent.com/DeepcometAI/assets/refs/heads/main/images/logo/vdotnet.svg)
+
 **voyage-lang** (`.voy`) is an independent language project built for exploration — not scoped to power any particular product, OS, or downstream consumer. It exists to explore what a modern, CLR-targeted language can look like when designed from scratch, unconstrained by legacy compatibility or a specific application domain.
 
 Part of [voyage-org](https://github.com/voyage-org), Deepcomet's third branch reserved for from-scratch, curiosity-driven language and systems work — distinct from the mainline [Deepcomet AI](https://ai.deepcomet.space) product line and Project Neutrino's OS/kernel research.
