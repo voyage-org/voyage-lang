@@ -103,6 +103,65 @@ purity-style static analysis — the same shape of problem as, e.g., checked
 exceptions or effect systems in other languages, applied specifically to
 "does this call graph ever suspend."
 
+### Rule 4 — External assemblies and function-typed values: unverifiable is unsafe
+
+Rule 3's transitive crawl only works because voyage-lang source always
+exposes enough information for `Voyage.Compiler/Semantics/` to compute
+`HasSuspensionPoints` by walking the AST. Two call shapes break that
+assumption, and both are resolved the same way: **if the call graph can't
+be statically verified, the call is unsafe by default and banned inside
+`atomic{}`.**
+
+**External-assembly calls.** A method imported from a referenced C#
+assembly (per ADR-0007, resolved via CLR metadata rather than voyage-lang
+source) has no voyage-lang AST for the effects pass to crawl — its IL body
+isn't a reliable signal for whether it awaits internally in a form the
+compiler can read the same way it reads voyage-lang source. Rather than
+guess from a proxy signal (naming conventions, `Task`/`Task<T>`-returning
+signatures), voyage-lang treats every external-assembly call from inside
+`atomic{}` as unsafe by default:
+
+```voyage
+atomic {
+    balance -= amount
+    externalLedger.recordDebit(amount)  // ❌ compile error by default —
+                                          // external call, unverifiable
+}
+```
+
+An external method may be called from inside `atomic{}` only if it carries
+an explicit safety annotation asserting the author has verified it never
+suspends — e.g. `@syncSafe` (exact attribute name provisional, needs a
+`grammar.md` entry) applied either at the import site or via a compiler-
+recognized allowlist mechanism in the project manifest. Because this
+annotation is a manual, human-asserted claim rather than something the
+compiler verified itself, it is a deliberate trust boundary: the developer
+is vouching for an assembly's behavior the compiler cannot check. This
+mirrors how `unsafe` blocks work in other CLR languages — the compiler
+stops checking and the human takes on the responsibility, explicitly and
+visibly at the call site.
+
+**Function-typed values.** Function pointers, delegates, and closures
+passed into or captured by an `atomic{}` block break the static call graph
+the same way — the actual target isn't known until runtime in the general
+case, so there's nothing for the transitive crawl to walk. Unlike external
+assemblies, there's no annotation escape hatch here: indirect calls through
+unconstrained function-typed values are **banned entirely** inside
+`atomic{}`, full stop.
+
+```voyage
+atomic {
+    let handler: () -> Void = someHandler
+    handler()  // ❌ compile error — indirect call, target not statically known
+}
+```
+
+The asymmetry between the two rules is deliberate: an external assembly is
+at least a fixed, inspectable artifact a human can audit once and assert
+safety for; a function-typed value's target can vary per call site and per
+invocation, so there's no stable thing to annotate as safe in the first
+place.
+
 ### Compiler pipeline
 
 Purely compile-time, in three phases, with nothing added to
@@ -148,22 +207,11 @@ Purely compile-time, in three phases, with nothing added to
   especially with recursive or highly generic call graphs. Needs
   benchmarking once implemented; may need incremental/cached effects
   computation rather than a full re-crawl per build.
-- **Negative / open risk:** Calls into **external assemblies** (imported
-  C# libraries, per ADR-0007) can't be transitively crawled the same way —
-  a C# method's IL body isn't guaranteed to expose whether it awaits
-  internally in a form the effects pass can statically read the same way
-  it reads voyage-lang source. This needs a follow-up decision: either (a)
-  treat all external-assembly calls from inside `atomic{}` as
-  conservatively unsafe (ban them outright) unless explicitly annotated as
-  safe, or (b) require some metadata convention (e.g. reading async-suffix
-  naming conventions or `Task`/`Task<T>`-returning signatures as a proxy
-  for "has suspension points"). Not resolved here — needs its own
-  follow-up before `atomic{}` + C# interop is safe to ship together.
-- **Follow-up:** function pointers / delegates / closures passed into or
-  captured by an `atomic{}` block complicate the static call graph (the
-  target isn't known until runtime in the general case) — worth an
-  explicit rule (likely: ban indirect calls through unconstrained
-  function-typed values inside `atomic{}` entirely) before implementation.
+- **Resolved:** external-assembly calls and indirect calls through
+  function-typed values are both handled by Rule 4 below — see that
+  section for the full mechanics and rationale. Both were open follow-ups
+  in earlier drafts of this ADR and are now closed with conservative,
+  ban-by-default resolutions.
 
 ## Alternatives Considered
 
@@ -186,3 +234,16 @@ Purely compile-time, in three phases, with nothing added to
   awkward to write for anything beyond trivial field mutation, without a
   corresponding safety benefit over the more precise transitive-await
   check.
+- **Proxy-signal detection for external assemblies** (e.g. treating any
+  C# method not returning `Task`/`Task<T>` as presumed synchronous) —
+  rejected; naming and signature conventions are not a reliable substitute
+  for actually knowing whether a method suspends, and a false negative
+  here would silently reintroduce the exact hazard `atomic{}` exists to
+  prevent. An explicit, human-asserted annotation is a visible trust
+  boundary; a proxy heuristic is an invisible one.
+- **Allowing function-typed calls with a runtime guard** (check at the
+  call site whether the invoked delegate happens to suspend, and fault if
+  so) — rejected for the same reason runtime-checked atomicity in general
+  was rejected above: it reintroduces runtime cost and a fault that
+  could theoretically surface far from its actual cause, instead of a
+  compile-time refusal to build.

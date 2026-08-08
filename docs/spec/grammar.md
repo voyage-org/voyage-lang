@@ -289,9 +289,13 @@ ADR-0006. Key implications for anyone writing actor code:
   real inner boundary), may call other synchronous methods on `self` or
   other actors, and are protected by whole-compilation-unit transitive-
   await detection so a hidden `await` several calls deep in a helper
-  function's call graph is still caught at compile time. See ADR-0008 for
-  the full rule set and the compiler pipeline (`Parsing/` → `Semantics/` →
-  `Diagnostics/`) that enforces it.
+  function's call graph is still caught at compile time. Calls into
+  external (e.g. C#) assemblies are banned by default unless explicitly
+  annotated as verified-safe; indirect calls through function
+  pointers/delegates/closures are banned entirely, since neither can be
+  statically verified. See ADR-0008 for the full rule set and the
+  compiler pipeline (`Parsing/` → `Semantics/` → `Diagnostics/`) that
+  enforces it.
 
 ## 9. Ownership (tentative — likely deferred)
 
