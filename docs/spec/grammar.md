@@ -341,12 +341,21 @@ import func System.Math.Sqrt
 
 ### Access levels and module boundaries
 
+**Default visibility: `internal`.** Any declaration written without an
+explicit access modifier is `internal` — visible within its own compiled
+module/assembly, invisible outside it. This matches Swift's default
+exactly and for the same reason: it lets single-file samples and quick
+scripts (like the `import`-free hello world in Section 3) require zero
+visibility ceremony, while still keeping declarations closed to outside
+assemblies until deliberately opened with `public`.
+
 Reuses the access-control keywords already listed in the token appendix:
 
 - `public` — visible to any referencing assembly, voyage-lang or otherwise
   (maps to CLR `public`)
 - `internal` — visible within the same compiled voyage-lang module/assembly
-  only (maps to CLR `internal`)
+  only (maps to CLR `internal`) — **the default when no modifier is
+  written**
 - `fileprivate` — visible within the declaring source file only (voyage-
   lang-level concept, erased to `internal`/`private` at the CIL level
   since the CLR has no file-scoped visibility)

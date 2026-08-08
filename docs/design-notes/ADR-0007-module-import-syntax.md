@@ -76,9 +76,14 @@ import func System.Math.Sqrt
 | voyage-lang | CLR equivalent | Scope |
 |---|---|---|
 | `public` | `public` | Any referencing assembly |
-| `internal` | `internal` | Same compiled module/assembly |
+| `internal` (default) | `internal` | Same compiled module/assembly |
 | `fileprivate` | erased to `internal`/`private` | Declaring source file (voyage-lang-level concept only — CLR has no file-scoped visibility) |
 | `private` | `private` | Declaring type |
+
+**Default visibility is `internal`** when no modifier is written, matching
+Swift's default exactly — see grammar.md Section 11 for the full rationale
+(zero-ceremony single-file samples while staying closed to outside
+assemblies by default).
 
 Because `public`/`internal` are real CLR modifiers rather than a voyage-
 lang-specific abstraction translated at a boundary, interop is
