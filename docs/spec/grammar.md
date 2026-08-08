@@ -5,7 +5,10 @@ Target: CIL / .NET (CLR), NativeAOT-first, `linux-musl-x64`/`arm64` as tier-1.
 
 This draft's syntax is Swift-inspired, and deliberately differentiated from
 Aurelia's syntax, so voyage-lang and Aurelia read as distinct sibling
-languages rather than reskins of each other.
+languages rather than reskins of each other. Type-level details
+(generics, associated types, existential/opaque protocol types, primitive-
+to-CLR type mapping) are specified separately in `type-system.md`; this
+document covers declaration and expression syntax.
 
 ---
 
@@ -436,9 +439,9 @@ C#.
 
 | Category | Tokens |
 |---|---|
-| Declarations | `func`, `struct`, `enum`, `protocol`, `extension`, `actor`, `case` |
+| Declarations | `func`, `struct`, `enum`, `protocol`, `extension`, `actor`, `case`, `associatedtype` |
 | Bindings | `let`, `var` |
-| Types | `Self`, `Any`, `Optional` (`?` sugar) |
+| Types | `Self`, `Any`, `Optional` (`?` sugar), `some`, `any` |
 | Attributes | `@main`, `@syncSafe` |
 | Control flow | `if`, `else`, `guard`, `switch`, `default`, `for`, `in`, `while`, `repeat`, `break`, `continue`, `return`, `fallthrough` |
 | Pattern binding | `if let`, `guard let` |
