@@ -94,9 +94,7 @@ dotnet run --project src/Voyage.Cli -- run samples/hello.voy
 ### Hello, world
 
 ```voy
-fn main() {
-    print("Hello, Voyage.")
-}
+print("Hello, Voyage.")
 ```
 
 *(Syntax is provisional and subject to change as the spec evolves.)*
