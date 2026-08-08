@@ -154,6 +154,33 @@ against other mailbox messages — it re-validates against current state
 rather than trusting the pre-`await` snapshot, closing the race the naive
 version would have.
 
+### The Golden Rule of `atomic{}`: No `await` Inside
+
+The single most important rule the compiler enforces for `atomic{}` is
+absolute: **an `atomic{}` block cannot contain an `await` expression.**
+`Voyage.Compiler/Semantics` rejects any `await` (direct or via a called
+function whose effective signature requires it) inside an `atomic{}` body
+as a compile error, not a warning — this is not a style guideline.
+
+The reason this rule is load-bearing rather than incidental: an actor's
+worker loop (Section "The Worker Loop" above) only interleaves the next
+mailbox message at a suspension point — i.e., at an `await`. If `atomic{}`
+contained no `await` points, there is nowhere for the loop runner to yield
+control mid-block. This guarantees the entire `atomic{}` body executes as
+a single, uninterrupted unit against the actor's state, start to finish,
+before any other pending message in the mailbox gets a chance to touch
+that state. It is, in effect, a synchronous critical section that is safe
+by construction rather than by discipline — the compiler makes the unsafe
+version (an `atomic{}` that yields partway through) impossible to write,
+rather than merely discouraged.
+
+This is also why `atomic{}` is not a general-purpose transaction
+mechanism: any operation that genuinely needs to suspend (I/O, calling
+another actor, awaiting a `Future<T>`) must happen *before* the `atomic{}`
+block, with its result captured into a local, exactly as shown in the
+`withdraw` example above. `atomic{}` exists purely for the synchronous
+re-validate-and-apply step against current actor state.
+
 ## Consequences
 
 - **Positive:** Matches Swift's deadlock-free reentrant design goal without
@@ -171,11 +198,12 @@ version would have.
   how it interacts with helper methods that touch `self` indirectly, and
   false-positive rate on legitimate patterns are all unresolved. Tracked
   as a follow-up, not solved by this ADR.
-- **Negative / open risk:** `atomic { }` block syntax and semantics
-  (can it itself contain `await`? almost certainly not, since that would
-  reintroduce the exact hazard it exists to close — needs an explicit
-  rule) are provisional and need their own `grammar.md` entry and
-  likely a dedicated ADR before implementation.
+- **Negative / open risk:** `atomic { }` block syntax beyond the no-`await`
+  rule (nesting behavior, whether it can call other synchronous actor
+  methods, exhaustiveness of the compiler's `await`-detection through
+  transitive calls) is still provisional and needs its own `grammar.md`
+  entry before implementation. The no-`await` rule itself is settled
+  (see "The Golden Rule of `atomic{}`" above) and is not open.
 - **Follow-up:** Actor-to-actor call ordering guarantees (or explicit lack
   thereof) under this model aren't yet specified — e.g., whether messages
   from a single sender to a single actor are guaranteed FIFO. `Channel<T>`

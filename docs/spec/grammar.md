@@ -281,8 +281,10 @@ ADR-0006. Key implications for anyone writing actor code:
   `await` without re-validation (`Voyage.Compiler/Semantics`).
 - The idiomatic pattern is: snapshot state into a local before `await`,
   perform the async work independently, then re-validate and apply changes
-  inside an `atomic { }` block on resume. See ADR-0006 for the full
-  example and open questions around `atomic { }` syntax.
+  inside an `atomic { }` block on resume. `atomic { }` **cannot contain
+  `await`** — this is compiler-enforced, not a style guideline — which
+  guarantees the block runs as a single uninterrupted unit against actor
+  state. See ADR-0006 for the full example and rationale.
 
 ## 9. Ownership (tentative — likely deferred)
 
@@ -339,7 +341,7 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
 | Control flow | `if`, `else`, `guard`, `switch`, `default`, `for`, `in`, `while`, `repeat`, `break`, `continue`, `return`, `fallthrough` |
 | Pattern binding | `if let`, `guard let` |
 | Error handling | `throw`, `throws`, `try`, `catch`, `do` |
-| Concurrency | `async`, `await`, `task`, `spawn`, `join`, `async let` |
+| Concurrency | `async`, `await`, `task`, `spawn`, `join`, `async let`, `atomic` |
 | Access control | `public`, `internal`, `private`, `fileprivate` |
 | Modifiers | `static`, `mutating`, `final`, `override` |
 | Literals | `true`, `false`, `nil` |
