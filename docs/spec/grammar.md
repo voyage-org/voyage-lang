@@ -42,9 +42,31 @@ func add(a: Int, b: Int) -> Int {
 }
 
 func greet(name: String) -> String {
-    "Hello, \(name)!"   // implicit return of last expression, TBD: adopt or not
+    "Hello, \(name)!"   // implicit return — single-expression body
 }
 ```
+
+### Implicit Return
+
+A function, computed property, or subscript whose body is a **single
+expression** matching the declared return type omits `return` entirely —
+matching Swift's scope exactly (see ADR-0005). `if`/`switch` count as a
+single expression when every branch is itself a single expression:
+
+```voyage
+func rating(for score: Int) -> String {
+    if score > 800 {
+        "Excellent"
+    } else if score > 500 {
+        "Good"
+    } else {
+        "Needs work"
+    }
+}
+```
+
+Multi-statement bodies always require an explicit `return` — this is a
+deliberate scope limit, not a gap to close later. See ADR-0005 for why.
 
 ### Entry Point Conventions
 
@@ -270,8 +292,10 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
 - [x] ~~Reconcile `actor` vs. `task{}` concurrency model~~ — resolved,
       see Section 8: complementary layers (isolation vs. structured
       concurrency), not either/or.
-- [ ] Decide implicit-return-of-last-expression (Swift allows it in some
-      contexts) vs. requiring explicit `return` everywhere
+- [x] ~~Decide implicit-return-of-last-expression~~ — resolved, see
+      "Implicit Return" under Section 3 and ADR-0005: adopted, scoped to
+      single-expression bodies only (including if/switch-as-expression),
+      matching Swift's own deliberate limit.
 - [x] ~~Decide on untyped `throws` as fallback alongside typed throws~~ —
       resolved, see Section 7 and ADR-0004: both supported, untyped is the
       default recommendation.
