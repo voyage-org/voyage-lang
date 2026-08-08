@@ -307,6 +307,70 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
 
 ---
 
+## 11. Modules and Imports
+
+voyage-lang's import syntax is Swift-inspired at the declaration level, but
+resolves against **CLR assembly metadata** rather than requiring a bridging
+layer — see ADR-0007 for the full rationale on why this makes C#
+interop structurally different (and simpler) than Aurelia's C interop or
+Swift's Clang-header interop.
+
+### Basic imports
+
+```voyage
+import Voyage.Collections        // a voyage-lang-native module
+import System.Text.Json          // a referenced .NET/C# assembly's namespace
+```
+
+There is no syntactic distinction between importing a voyage-lang module
+and importing a C#-authored (or F#-authored, or any CLR-language-authored)
+namespace — both resolve through the same CLR assembly-metadata mechanism.
+Whether an `import`ed symbol originated from `Voyage.Compiler` output or
+`csc`/Roslyn output is invisible at the import-declaration level.
+
+### Scoped imports
+
+Matching Swift's `import <kind> Module.Symbol` form, for importing a single
+declaration rather than an entire namespace:
+
+```voyage
+import struct System.Guid
+import class System.Text.StringBuilder
+import func System.Math.Sqrt
+```
+
+### Access levels and module boundaries
+
+Reuses the access-control keywords already listed in the token appendix:
+
+- `public` — visible to any referencing assembly, voyage-lang or otherwise
+  (maps to CLR `public`)
+- `internal` — visible within the same compiled voyage-lang module/assembly
+  only (maps to CLR `internal`)
+- `fileprivate` — visible within the declaring source file only (voyage-
+  lang-level concept, erased to `internal`/`private` at the CIL level
+  since the CLR has no file-scoped visibility)
+- `private` — visible within the declaring type only
+
+Because `public`/`internal` map directly onto real CLR accessibility
+modifiers, a `public` voyage-lang type is consumable from a C# project
+referencing the compiled voyage-lang assembly with zero extra ceremony —
+interop is bidirectional by construction, not just voyage-lang-importing-
+C#.
+
+### Open items
+
+- Whether voyage-lang needs a Swift-style `@testable import` equivalent —
+  not yet decided.
+- Whether re-exporting (Swift's `@_exported import`) is supported — not
+  yet decided.
+- Package/project manifest format for declaring assembly references
+  (analogous to `.csproj` `<PackageReference>`) is a `Voyage.Cli` tooling
+  concern, not a language-syntax one, and is out of scope for this
+  document.
+
+---
+
 ## Open Items for Next Pass
 
 - [x] ~~Reconcile `actor` vs. `task{}` concurrency model~~ — resolved,
@@ -321,7 +385,11 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
       default recommendation.
 - [ ] Property wrappers / result builders — not yet decided whether
       voyage-lang adopts an equivalent
-- [ ] Module/import syntax — not yet drafted
+- [x] ~~Module/import syntax~~ — resolved, see Section 11 and ADR-0007:
+      Swift-inspired declaration syntax resolving against CLR assembly
+      metadata directly, no C interop-style bridging layer needed.
+      Sub-items still open: `@testable import`, re-export syntax, package
+      manifest format (tooling, not language syntax).
 - [ ] Attribute/annotation syntax (voyage-lang equivalent of Aurelia's
       `@differentiable`/`@invariant`, if any) — not yet decided; would be a
       deliberate divergence point rather than a copy of either sibling
