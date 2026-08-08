@@ -46,6 +46,32 @@ func greet(name: String) -> String {
 }
 ```
 
+### Entry Point Conventions
+
+voyage-lang supports two entry point styles, matching Swift's split:
+
+**Top-level statements** — for single-file scripts and samples. No
+wrapping function required; the file executes top to bottom:
+
+```voyage
+print("Hello, Voyage.")
+```
+
+**`@main` attribute** — for structured, multi-file programs (the expected
+shape for anything built via `Voyage.Cli`). Attaches to a type with a
+static `main()`:
+
+```voyage
+struct VoyageMain {
+    static func main() throws(AppError) {
+        print("Hello, Voyage.")
+    }
+}
+```
+
+`@main` composes with typed throws directly, matching the error-handling
+model in Section 7 — no separate untyped-`main` special case needed.
+
 Generic functions use `<T>` with optional `where` clauses:
 
 ```voyage
@@ -251,6 +277,7 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
 | Declarations | `func`, `struct`, `enum`, `protocol`, `extension`, `actor`, `case` |
 | Bindings | `let`, `var` |
 | Types | `Self`, `Any`, `Optional` (`?` sugar) |
+| Attributes | `@main` |
 | Control flow | `if`, `else`, `guard`, `switch`, `default`, `for`, `in`, `while`, `repeat`, `break`, `continue`, `return`, `fallthrough` |
 | Pattern binding | `if let`, `guard let` |
 | Error handling | `throw`, `throws`, `try`, `catch`, `do` |
