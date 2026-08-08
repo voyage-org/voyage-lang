@@ -131,15 +131,38 @@ atomic {
 
 An external method may be called from inside `atomic{}` only if it carries
 an explicit safety annotation asserting the author has verified it never
-suspends — e.g. `@syncSafe` (exact attribute name provisional, needs a
-`grammar.md` entry) applied either at the import site or via a compiler-
-recognized allowlist mechanism in the project manifest. Because this
-annotation is a manual, human-asserted claim rather than something the
-compiler verified itself, it is a deliberate trust boundary: the developer
-is vouching for an assembly's behavior the compiler cannot check. This
-mirrors how `unsafe` blocks work in other CLR languages — the compiler
-stops checking and the human takes on the responsibility, explicitly and
-visibly at the call site.
+suspends — `@syncSafe`, attached to a **scoped import** of that specific
+symbol:
+
+```voyage
+@syncSafe
+import func System.Math.Sqrt          // fine as-is: rarely a real question,
+                                       // but the annotation is required anyway
+                                       // for consistency and auditability
+
+@syncSafe
+import func ExternalLedger.recordDebit
+```
+
+`@syncSafe` attaches only to scoped (single-symbol) imports, never to a
+whole-namespace `import`, and never at the individual call site — this
+keeps the assertion in one auditable place per symbol rather than scattered
+across every call, and makes a whole-namespace import of an unaudited
+library safe by default (nothing in it is callable from `atomic{}` until
+someone deliberately re-imports that one symbol with the annotation).
+Instance methods on imported types need a scoped import naming the
+member the same way; if the target member can't be named as a standalone
+scoped import, the recommended pattern is a small voyage-lang-authored
+wrapper function that calls it — since that wrapper is real voyage-lang
+source, Rule 3's ordinary transitive crawl verifies it like anything else,
+and no `@syncSafe` assertion is needed at all.
+
+Because this annotation is a manual, human-asserted claim rather than
+something the compiler verified itself, it is a deliberate trust boundary:
+the developer is vouching for an assembly's behavior the compiler cannot
+check. This mirrors how `unsafe` blocks work in other CLR languages — the
+compiler stops checking and the human takes on the responsibility,
+explicitly and visibly at the import site.
 
 **Function-typed values.** Function pointers, delegates, and closures
 passed into or captured by an `atomic{}` block break the static call graph

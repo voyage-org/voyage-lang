@@ -350,6 +350,17 @@ import class System.Text.StringBuilder
 import func System.Math.Sqrt
 ```
 
+`@syncSafe` may attach to a scoped import to assert the symbol never
+suspends, permitting it to be called from inside an `atomic { }` block
+(Section 8). See ADR-0008 Rule 4 for the full rationale — the annotation
+is a manual, human-asserted trust boundary, required per-symbol, and never
+attaches to a whole-namespace import.
+
+```voyage
+@syncSafe
+import func ExternalLedger.recordDebit
+```
+
 ### Access levels and module boundaries
 
 **Default visibility: `internal`.** Any declaration written without an
@@ -425,7 +436,7 @@ C#.
 | Declarations | `func`, `struct`, `enum`, `protocol`, `extension`, `actor`, `case` |
 | Bindings | `let`, `var` |
 | Types | `Self`, `Any`, `Optional` (`?` sugar) |
-| Attributes | `@main` |
+| Attributes | `@main`, `@syncSafe` |
 | Control flow | `if`, `else`, `guard`, `switch`, `default`, `for`, `in`, `while`, `repeat`, `break`, `continue`, `return`, `fallthrough` |
 | Pattern binding | `if let`, `guard let` |
 | Error handling | `throw`, `throws`, `try`, `catch`, `do` |
