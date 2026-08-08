@@ -198,12 +198,12 @@ re-validate-and-apply step against current actor state.
   how it interacts with helper methods that touch `self` indirectly, and
   false-positive rate on legitimate patterns are all unresolved. Tracked
   as a follow-up, not solved by this ADR.
-- **Negative / open risk:** `atomic { }` block syntax beyond the no-`await`
-  rule (nesting behavior, whether it can call other synchronous actor
-  methods, exhaustiveness of the compiler's `await`-detection through
-  transitive calls) is still provisional and needs its own `grammar.md`
-  entry before implementation. The no-`await` rule itself is settled
-  (see "The Golden Rule of `atomic{}`" above) and is not open.
+- **Resolved by ADR-0008:** `atomic { }` block syntax beyond the
+  no-`await` rule — nesting behavior (flat/no-op), calling other
+  synchronous actor methods, and transitive-await detection through
+  helper-function call graphs — is fully specified in
+  ADR-0008-atomic-block-full-syntax.md. The no-`await` rule itself was
+  already settled here (see "The Golden Rule of `atomic{}`" above).
 - **Follow-up:** Actor-to-actor call ordering guarantees (or explicit lack
   thereof) under this model aren't yet specified — e.g., whether messages
   from a single sender to a single actor are guaranteed FIFO. `Channel<T>`

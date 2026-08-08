@@ -285,6 +285,13 @@ ADR-0006. Key implications for anyone writing actor code:
   `await`** — this is compiler-enforced, not a style guideline — which
   guarantees the block runs as a single uninterrupted unit against actor
   state. See ADR-0006 for the full example and rationale.
+- `atomic { }` blocks nest as a no-op (flattened by the lowering phase, no
+  real inner boundary), may call other synchronous methods on `self` or
+  other actors, and are protected by whole-compilation-unit transitive-
+  await detection so a hidden `await` several calls deep in a helper
+  function's call graph is still caught at compile time. See ADR-0008 for
+  the full rule set and the compiler pipeline (`Parsing/` → `Semantics/` →
+  `Diagnostics/`) that enforces it.
 
 ## 9. Ownership (tentative — likely deferred)
 
