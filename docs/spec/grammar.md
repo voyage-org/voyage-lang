@@ -304,7 +304,10 @@ currently adopted**, since voyage-lang targets the CLR, which has no runtime-lev
 compile-time ownership model comparable to Rust/Swift's. Would require
 compiler-enforced static analysis layered on top, similar in spirit to
 Aurelia's Neuro-Linear Borrow Analyzer. Deferred to a future ADR if
-performance-critical NativeAOT paths need it.
+performance-critical NativeAOT paths need it. See `memory-model.md` and
+ADR-0009 for the full reasoning: the CLR's tracing GC removes the safety
+motivation Swift/Rust ownership exists for, so this stays a possible
+future *performance* tool rather than a safety mechanism.
 
 ## 10. String Interpolation
 
@@ -442,7 +445,8 @@ C#.
 | Error handling | `throw`, `throws`, `try`, `catch`, `do` |
 | Concurrency | `async`, `await`, `task`, `spawn`, `join`, `async let`, `atomic` |
 | Access control | `public`, `internal`, `private`, `fileprivate` |
-| Modifiers | `static`, `mutating`, `final`, `override` |
+| Modifiers | `static`, `mutating`, `final`, `override`, `weak` |
+| Memory / cleanup | `defer`, `using` |
 | Literals | `true`, `false`, `nil` |
 | Miscellaneous | `import`, `where`, `as`, `is`, `self`, `super` |
 
