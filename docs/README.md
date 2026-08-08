@@ -53,6 +53,7 @@ way the first time.
 | [0007](design-notes/ADR-0007-module-import-syntax.md) | Module/import syntax resolves directly against CLR assembly metadata — no ClangImporter-style bridging layer needed for C# interop |
 | [0008](design-notes/ADR-0008-atomic-block-full-syntax.md) | Full `atomic{}` rule set: flat/no-op nesting, synchronous-call constraints, whole-compilation-unit transitive-await detection, `@syncSafe` for external-assembly exemptions |
 | [0009](design-notes/ADR-0009-tracing-gc-not-arc.md) | Reference-type memory management uses the CLR's tracing GC, not Swift's ARC |
+| [0010](design-notes/ADR-0010-compiler-architecture.md) | `Voyage.Compiler` architecture: hand-written recursive descent (matching Swift's own `lib/Parse/`), five-phase pipeline (`Lexing/` → `Parsing/` → `Semantics/` → `Lowering/` → `Diagnostics/`), and where implementation should start |
 
 ### A note on ADR-0006 and ADR-0008/ADR-0009
 
@@ -82,7 +83,7 @@ and new ADR should cross-reference each other.
   `@testable import`/re-export syntax, or a package/project manifest
   format — all tracked as deferred or out-of-scope-for-language-design in
   the relevant spec file's open items.
-- No ADRs yet exist for `Voyage.Compiler`'s internal architecture (parser
-  strategy, pass structure, generic specialization/monomorphization
-  approach) — these are implementation-phase decisions, expected once
-  compiler work begins in earnest.
+- No ADRs yet exist for `Voyage.Compiler`'s deeper internals — `CodeGen/`
+  architecture and generic specialization/monomorphization strategy are
+  explicitly deferred by ADR-0010 to their own future ADRs once more
+  implementation-level groundwork exists.
