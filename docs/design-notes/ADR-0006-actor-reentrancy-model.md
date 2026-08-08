@@ -31,7 +31,7 @@ actors, deadlock-free by construction) without being able to reuse Swift's
 *implementation strategy*. `Voyage.Runtime` needs its own lowering
 strategy suited to how the CLR actually schedules work.
 
-A na�ve port using something like a heavy `SynchronizationContext` to force
+A naive port using something like a heavy `SynchronizationContext` to force
 actor-method continuations back onto a captured context would work
 semantically but kills scalability — it reintroduces exactly the kind of
 thread affinity that makes ASP.NET's classic `SynchronizationContext`
