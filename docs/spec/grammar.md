@@ -266,6 +266,24 @@ Built-in `Sender<T>` / `Receiver<T>` channels for message passing. Explicit
 `CancelToken` parameters for cancellation, rather than Swift's ambient
 cancellation propagation.
 
+### Actor Reentrancy Model
+
+`actor` in voyage-lang is **fully reentrant**, matching Swift's design goal
+for deadlock-free actor calls, but implemented via a lock-free mailbox loop
+suited to the CLR's `ThreadPool`/`IAsyncStateMachine` model rather than a
+Swift-style custom scheduler. Full rationale and implementation pattern in
+ADR-0006. Key implications for anyone writing actor code:
+
+- State mutated by other messages **can** change between the start and end
+  of a method body if that body contains an `await` — actor-local
+  invariants are not preserved across suspension points.
+- The compiler statically flags `self`-scoped mutable state access after an
+  `await` without re-validation (`Voyage.Compiler/Semantics`).
+- The idiomatic pattern is: snapshot state into a local before `await`,
+  perform the async work independently, then re-validate and apply changes
+  inside an `atomic { }` block on resume. See ADR-0006 for the full
+  example and open questions around `atomic { }` syntax.
+
 ## 9. Ownership (tentative — likely deferred)
 
 Swift's `borrowing` / `consuming` contextual keywords are noted but **not
