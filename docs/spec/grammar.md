@@ -144,11 +144,12 @@ while condition {
 }
 ```
 
-## 7. Error Handling — Typed Throws
+## 7. Error Handling — Typed Throws with Untyped Fallback
 
 Diverges from Aurelia's `Result<T, E>` pattern. Adopts Swift's typed throws
 (`throws(ErrorType)`) for compile-time-checked error types with ergonomic
-propagation:
+propagation, **alongside** plain untyped `throws` as a first-class fallback
+— not a deprecated escape hatch. See ADR-0004 for the full rationale.
 
 ```voyage
 enum ConfigError: Error {
@@ -156,6 +157,7 @@ enum ConfigError: Error {
     case parseFailure(reason: String)
 }
 
+// Typed: precise, exhaustive catch, best for a fixed, known error surface
 func loadConfig(path: String) throws(ConfigError) -> Config {
     guard fileExists(path) else {
         throw ConfigError.fileNotFound(path: path)
@@ -163,17 +165,29 @@ func loadConfig(path: String) throws(ConfigError) -> Config {
     // ...
 }
 
-func run() {
+// Untyped: default choice for app code, libraries with evolving errors,
+// or functions that call into several differently-typed throwers
+func run() throws {
+    let config = try loadConfig(path: "voyage.toml")
+    // ...
+}
+
+func handle() {
     do {
-        let config = try loadConfig(path: "voyage.toml")
+        try run()
     } catch let error as ConfigError {
-        // exhaustive, typed catch
+        // narrow, typed catch when it's known
+    } catch {
+        // exhaustive fallback for `any Error`
     }
 }
 ```
 
-Open question: whether untyped `throws` (any `Error`) remains available as an
-escape hatch alongside typed throws, as in Swift.
+Guidance (not enforced by the compiler): reach for typed throws in
+performance-critical or embedded-style code paths with a small, fixed error
+surface; default to untyped `throws` everywhere else, especially public
+library APIs whose error sets may grow — a typed-throws signature change is
+a breaking change in a way an untyped one is not.
 
 ## 8. Concurrency
 
@@ -258,7 +272,9 @@ Matches Swift's `\(...)` exactly — diverges from Aurelia's f-string style
       concurrency), not either/or.
 - [ ] Decide implicit-return-of-last-expression (Swift allows it in some
       contexts) vs. requiring explicit `return` everywhere
-- [ ] Decide on untyped `throws` as fallback alongside typed throws
+- [x] ~~Decide on untyped `throws` as fallback alongside typed throws~~ —
+      resolved, see Section 7 and ADR-0004: both supported, untyped is the
+      default recommendation.
 - [ ] Property wrappers / result builders — not yet decided whether
       voyage-lang adopts an equivalent
 - [ ] Module/import syntax — not yet drafted
