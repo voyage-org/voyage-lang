@@ -1,5 +1,6 @@
 using Voyage.Compiler.Diagnostics;
 using Voyage.Compiler.Lexing;
+using Voyage.Compiler.Parsing;
 
 var failures = 0;
 var passes = 0;
@@ -239,6 +240,142 @@ Console.WriteLine("=== Newline handling ===");
     Check("three consecutive blank lines collapse into one Newline token",
         newlineCount == 1,
         $"got {newlineCount} newline tokens");
+}
+
+// ---------------------------------------------------------------------
+// 9. Parsing/ milestone: samples/hello.voy -> AST -> dump
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Parsing/ Milestone: samples/hello.voy -> AST ===");
+{
+    var samplePath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "hello.voy");
+    samplePath = Path.GetFullPath(samplePath);
+    var source = File.ReadAllText(samplePath);
+
+    var lexSink = new InMemoryDiagnosticSink();
+    var tokens = Lexer.Tokenize(source, lexSink);
+
+    var parseSink = new InMemoryDiagnosticSink();
+    var unit = Parser.Parse(tokens, parseSink);
+
+    var dump = AstPrinter.Print(unit);
+    Console.WriteLine(dump);
+
+    Check("no lexer diagnostics", lexSink.Diagnostics.Count == 0);
+    Check("no parser diagnostics", parseSink.Diagnostics.Count == 0,
+        string.Join("; ", parseSink.Diagnostics));
+    Check("CompilationUnit has exactly one statement",
+        unit.Statements.Count == 1, $"got {unit.Statements.Count}");
+
+    var stmt = unit.Statements[0];
+    Check("statement is an ExpressionStatement", stmt is ExpressionStatement);
+
+    if (stmt is ExpressionStatement { Expression: CallExpression call })
+    {
+        Check("call's callee is IdentifierExpression 'print'",
+            call.Callee is IdentifierExpression { Name: "print" });
+        Check("call has exactly one argument", call.Arguments.Count == 1,
+            $"got {call.Arguments.Count}");
+        Check("argument is StringLiteralExpression 'Hello, Voyage.'",
+            call.Arguments is [StringLiteralExpression { Value: "Hello, Voyage." }]);
+    }
+    else
+    {
+        Check("statement's expression is a CallExpression", false,
+            $"got {stmt}");
+    }
+}
+
+// ---------------------------------------------------------------------
+// 10. Parser: multi-argument calls, nested calls, literals, parens
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Parser: expressions beyond hello world ===");
+
+CompilationUnit ParseSource(string source, out InMemoryDiagnosticSink sink)
+{
+    var lexSink = new InMemoryDiagnosticSink();
+    var tokens = Lexer.Tokenize(source, lexSink);
+    sink = new InMemoryDiagnosticSink();
+    return Parser.Parse(tokens, sink);
+}
+
+{
+    var unit = ParseSource("add(1, 2, 3)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("multi-arg call has 3 arguments", call?.Arguments.Count == 3,
+        $"got {call?.Arguments.Count}");
+}
+{
+    // A call expression whose argument is itself a call expression —
+    // exercises ParsePostfix/ParseExpression recursion.
+    var unit = ParseSource("outer(inner(1))", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var outer = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    var innerArgOk = outer?.Arguments is [CallExpression { Callee: IdentifierExpression { Name: "inner" } }];
+    Check("nested call expression parses correctly", innerArgOk);
+}
+{
+    var unit = ParseSource("f(42, 3.14, true, false, nil)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    var argsOk = call?.Arguments is
+    [
+        IntegerLiteralExpression { Value: 42 },
+        FloatLiteralExpression { Value: 3.14 },
+        BooleanLiteralExpression { Value: true },
+        BooleanLiteralExpression { Value: false },
+        NilLiteralExpression,
+    ];
+    Check("all literal kinds parse correctly as call arguments", argsOk);
+}
+{
+    var unit = ParseSource("f((1))", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    var ok = call?.Arguments is
+        [ParenthesizedExpression { Inner: IntegerLiteralExpression { Value: 1 } }];
+    Check("parenthesized expression parses correctly", ok);
+}
+
+// ---------------------------------------------------------------------
+// 11. Parser: graceful degradation on not-yet-supported constructs
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully ===");
+{
+    // `let` is real, valid voyage-lang (grammar.md Section 2) but this
+    // milestone's parser doesn't implement declarations yet. It should
+    // report a diagnostic and produce an UnsupportedStatement rather
+    // than crashing or silently losing the rest of the file.
+    var unit = ParseSource("let x = 1\nprint(\"after\")", out var sink);
+    Check("exactly one diagnostic reported (the 'let' warning)",
+        sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
+    Check("two statements produced despite the unsupported first one",
+        unit.Statements.Count == 2, $"got {unit.Statements.Count}");
+    Check("statement[0] is UnsupportedStatement",
+        unit.Statements[0] is UnsupportedStatement);
+    Check("statement[1] still parses correctly (parser recovered)",
+        unit.Statements[1] is ExpressionStatement
+        {
+            Expression: CallExpression
+            {
+                Callee: IdentifierExpression { Name: "print" },
+                Arguments: [StringLiteralExpression { Value: "after" }],
+            },
+        });
+}
+{
+    // String interpolation is real, valid voyage-lang (grammar.md
+    // Section 10) but explicitly out of scope for this parser
+    // milestone too — same graceful-degradation contract.
+    var unit = ParseSource("print(\"Hello, \\(name)!\")", out var sink);
+    Check("interpolation reports exactly one diagnostic",
+        sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("interpolated argument becomes an ErrorExpression, not a crash",
+        call?.Arguments is [ErrorExpression]);
 }
 
 // ---------------------------------------------------------------------
