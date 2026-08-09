@@ -1,0 +1,20 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    NativeAOT-related properties (PublishAot, RuntimeIdentifiers, etc.)
+    are intentionally not set here yet. Per ADR-0010, CodeGen/ and the
+    generic monomorphization strategy NativeAOT publishing depends on
+    are deferred to their own future ADR — setting AOT publish
+    properties now, ahead of that design work, would be premature.
+  -->
+
+</Project>

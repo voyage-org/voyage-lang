@@ -77,7 +77,7 @@ The compiler is built as a **library first, CLI second** (`Voyage.Compiler` + a 
 
 ## Getting Started
 
-> Prerequisites: [.NET 9 SDK](https://dotnet.microsoft.com/) or later.
+> Prerequisites: [.NET 10 SDK](https://dotnet.microsoft.com/) or later.
 
 ```bash
 git clone https://github.com/voyage-org/voyage-lang.git
@@ -120,10 +120,24 @@ print("Hello, Voyage.")
 
 ---
 
+## Building
+
+```
+dotnet build
+dotnet run --project tests/Voyage.Compiler.Tests
+```
+
+Requires the .NET 10 SDK. `tests/Voyage.Compiler.Tests` currently runs as
+a plain console app rather than via `dotnet test` — see its directory for
+why, if you're wondering.
+
+---
+
 ## Roadmap
 
-- [ ] Finalize `docs/spec/grammar.md` and `type-system.md`
-- [ ] Lexer + parser → working AST
+- [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 10 ADRs
+- [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
+- [ ] Parser → working AST (`src/Voyage.Compiler/Parsing/`) — next up; first milestone is `samples/hello.voy` round-tripping to an AST dump
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

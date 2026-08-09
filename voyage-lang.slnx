@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Voyage.Compiler/Voyage.Compiler.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Voyage.Compiler.Tests/Voyage.Compiler.Tests.csproj" />
+  </Folder>
+</Solution>
