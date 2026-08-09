@@ -137,7 +137,8 @@ why, if you're wondering.
 
 - [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 10 ADRs
 - [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
-- [ ] Parser → working AST (`src/Voyage.Compiler/Parsing/`) — next up; first milestone is `samples/hello.voy` round-tripping to an AST dump
+- [x] Parser first milestone → `samples/hello.voy` round-trips to an AST dump (`src/Voyage.Compiler/Parsing/`), 67/67 checks passing across Lexing/ + Parsing/
+- [ ] Parser: grow grammar outward (`let`/`var`, `func`, control flow, `struct`/`enum`, ...)
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`
