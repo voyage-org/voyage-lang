@@ -345,12 +345,14 @@ CompilationUnit ParseSource(string source, out InMemoryDiagnosticSink sink)
 Console.WriteLine();
 Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully ===");
 {
-    // `let` is real, valid voyage-lang (grammar.md Section 2) but this
-    // milestone's parser doesn't implement declarations yet. It should
+    // `func` is real, valid voyage-lang (grammar.md Section 3) but this
+    // milestone's parser doesn't implement declarations yet (`let`/`var`
+    // bindings are now supported — see the "Binding statements" section
+    // below — but `func` and other declarations still aren't). It should
     // report a diagnostic and produce an UnsupportedStatement rather
     // than crashing or silently losing the rest of the file.
-    var unit = ParseSource("let x = 1\nprint(\"after\")", out var sink);
-    Check("exactly one diagnostic reported (the 'let' warning)",
+    var unit = ParseSource("func f() {}\nprint(\"after\")", out var sink);
+    Check("exactly one diagnostic reported (the 'func' warning)",
         sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
     Check("two statements produced despite the unsupported first one",
         unit.Statements.Count == 2, $"got {unit.Statements.Count}");
@@ -376,6 +378,184 @@ Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully =
     var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
     Check("interpolated argument becomes an ErrorExpression, not a crash",
         call?.Arguments is [ErrorExpression]);
+}
+
+// ---------------------------------------------------------------------
+// 12. Binding statements: let/var
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Binding statements ===");
+{
+    var unit = ParseSource("let x = 10", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    Check("'let x = 10' parses as an immutable BindingStatement",
+        unit.Statements is [BindingStatement { IsMutable: false, Name: "x", Initializer: IntegerLiteralExpression { Value: 10 } }]);
+}
+{
+    var unit = ParseSource("var y = 20", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    Check("'var y = 20' parses as a mutable BindingStatement",
+        unit.Statements is [BindingStatement { IsMutable: true, Name: "y", Initializer: IntegerLiteralExpression { Value: 20 } }]);
+}
+{
+    // Type annotations aren't implemented yet — should warn, ignore the
+    // annotation, and still produce a correct binding from the initializer.
+    var unit = ParseSource("let z: Int = 30", out var sink);
+    Check("exactly one warning about the unsupported type annotation",
+        sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
+    Check("annotation ignored, binding still parses correctly",
+        unit.Statements is [BindingStatement { IsMutable: false, Name: "z", Initializer: IntegerLiteralExpression { Value: 30 } }]);
+}
+{
+    // No initializer at all isn't supported yet — should degrade
+    // gracefully (error + UnsupportedStatement), same recovery contract
+    // as every other not-yet-supported construct, and the parser should
+    // still pick back up correctly on the next line.
+    var unit = ParseSource("let x\nprint(\"after\")", out var sink);
+    Check("exactly one error about the missing initializer",
+        sink.Diagnostics.Count == 1 && sink.HasErrors,
+        string.Join("; ", sink.Diagnostics));
+    Check("two statements produced, parser recovered on line 2",
+        unit.Statements is
+        [
+            UnsupportedStatement,
+            ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } },
+        ]);
+}
+
+// ---------------------------------------------------------------------
+// 13. Binary/unary operators: precedence and associativity
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Operator precedence and associativity ===");
+{
+    // Multiplication binds tighter than addition: 1 + 2 * 3 == 1 + (2 * 3)
+    var unit = ParseSource("f(1 + 2 * 3)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'1 + 2 * 3' parses as Add(1, Multiply(2, 3))",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.Add,
+                Left: IntegerLiteralExpression { Value: 1 },
+                Right: BinaryExpression
+                {
+                    Operator: BinaryOperator.Multiply,
+                    Left: IntegerLiteralExpression { Value: 2 },
+                    Right: IntegerLiteralExpression { Value: 3 },
+                },
+            },
+        ]);
+}
+{
+    // Explicit parens override precedence: (1 + 2) * 3
+    var unit = ParseSource("f((1 + 2) * 3)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'(1 + 2) * 3' parses as Multiply(Paren(Add(1,2)), 3)",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.Multiply,
+                Left: ParenthesizedExpression { Inner: BinaryExpression { Operator: BinaryOperator.Add } },
+                Right: IntegerLiteralExpression { Value: 3 },
+            },
+        ]);
+}
+{
+    // Addition is left-associative: 1 + 2 + 3 == (1 + 2) + 3
+    var unit = ParseSource("f(1 + 2 + 3)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'1 + 2 + 3' is left-associative: Add(Add(1,2), 3)",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.Add,
+                Left: BinaryExpression { Operator: BinaryOperator.Add, Left: IntegerLiteralExpression { Value: 1 }, Right: IntegerLiteralExpression { Value: 2 } },
+                Right: IntegerLiteralExpression { Value: 3 },
+            },
+        ]);
+}
+{
+    // Nil-coalescing is right-associative: a ?? b ?? c == a ?? (b ?? c)
+    var unit = ParseSource("f(a ?? b ?? c)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'a ?? b ?? c' is right-associative: NilCoalescing(a, NilCoalescing(b,c))",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.NilCoalescing,
+                Left: IdentifierExpression { Name: "a" },
+                Right: BinaryExpression { Operator: BinaryOperator.NilCoalescing, Left: IdentifierExpression { Name: "b" }, Right: IdentifierExpression { Name: "c" } },
+            },
+        ]);
+}
+{
+    // || binds looser than &&: true && false || true == (true && false) || true
+    var unit = ParseSource("f(true && false || true)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'&&' binds tighter than '||'",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.LogicalOr,
+                Left: BinaryExpression { Operator: BinaryOperator.LogicalAnd },
+                Right: BooleanLiteralExpression { Value: true },
+            },
+        ]);
+}
+{
+    // Unary binds tighter than binary: -x + 1 == (-x) + 1
+    var unit = ParseSource("f(-x + 1)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'-x + 1' parses as Add(Negate(x), 1)",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.Add,
+                Left: UnaryExpression { Operator: UnaryOperator.Negate, Operand: IdentifierExpression { Name: "x" } },
+                Right: IntegerLiteralExpression { Value: 1 },
+            },
+        ]);
+}
+{
+    var unit = ParseSource("f(!flag && ready)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'!flag && ready' parses as And(Not(flag), ready)",
+        call?.Arguments is
+        [
+            BinaryExpression
+            {
+                Operator: BinaryOperator.LogicalAnd,
+                Left: UnaryExpression { Operator: UnaryOperator.LogicalNot, Operand: IdentifierExpression { Name: "flag" } },
+                Right: IdentifierExpression { Name: "ready" },
+            },
+        ]);
+}
+{
+    var unit = ParseSource("let sum = 1 + 2", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    Check("binding initializer can be a full binary expression",
+        unit.Statements is
+        [
+            BindingStatement
+            {
+                Name: "sum",
+                Initializer: BinaryExpression { Operator: BinaryOperator.Add, Left: IntegerLiteralExpression { Value: 1 }, Right: IntegerLiteralExpression { Value: 2 } },
+            },
+        ]);
 }
 
 // ---------------------------------------------------------------------

@@ -16,6 +16,27 @@ public abstract record AstNode(SourceSpan Span);
 
 public abstract record Expression(SourceSpan Span) : AstNode(Span);
 
+/// <summary>
+/// Binary operators voyage-lang currently defines, per grammar.md's
+/// "Operator Precedence and Associativity" table. Deliberately its own
+/// enum rather than reusing Lexing.TokenKind directly — later phases
+/// (Semantics/, Lowering/) shouldn't need to know lexer token
+/// representations to reason about what operation an expression performs.
+/// </summary>
+public enum BinaryOperator
+{
+    Add, Subtract, Multiply, Divide, Modulo,
+    Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+    LogicalAnd, LogicalOr,
+    NilCoalescing,
+}
+
+public enum UnaryOperator
+{
+    Negate,     // unary -
+    LogicalNot, // !
+}
+
 /// <summary>A bare name reference, e.g. `print`, `x`.</summary>
 public sealed record IdentifierExpression(string Name, SourceSpan Span) : Expression(Span);
 
@@ -51,6 +72,25 @@ public sealed record CallExpression(
     SourceSpan Span) : Expression(Span);
 
 /// <summary>
+/// A binary expression, e.g. `a + b`, `x == y`, `a ?? b`. Precedence and
+/// associativity are baked into how the parser builds this tree (see
+/// grammar.md's "Operator Precedence and Associativity" table) — by the
+/// time a BinaryExpression exists, precedence has already been resolved
+/// structurally; later phases don't need to re-derive it.
+/// </summary>
+public sealed record BinaryExpression(
+    Expression Left,
+    BinaryOperator Operator,
+    Expression Right,
+    SourceSpan Span) : Expression(Span);
+
+/// <summary>A unary expression, e.g. `-x`, `!flag`.</summary>
+public sealed record UnaryExpression(
+    UnaryOperator Operator,
+    Expression Operand,
+    SourceSpan Span) : Expression(Span);
+
+/// <summary>
 /// A recovery placeholder produced where an expression was expected but
 /// the parser couldn't make sense of what it found (or found a
 /// not-yet-supported construct, e.g. string interpolation). Lets parsing
@@ -74,6 +114,19 @@ public abstract record Statement(SourceSpan Span) : AstNode(Span);
 /// until a later milestone, per Parsing/README.md.
 /// </summary>
 public sealed record ExpressionStatement(Expression Expression, SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// A `let`/`var` binding with an initializer, e.g. `let x = 10`. Per
+/// grammar.md's "Parser implementation note" under Section 2, the
+/// current parser milestone requires an initializer and does not yet
+/// parse an explicit `: Type` annotation — both are real, spec'd
+/// grammar, just not yet implemented here.
+/// </summary>
+public sealed record BindingStatement(
+    bool IsMutable,
+    string Name,
+    Expression Initializer,
+    SourceSpan Span) : Statement(Span);
 
 /// <summary>
 /// Placeholder for a statement the parser recognized the start of but

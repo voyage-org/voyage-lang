@@ -8,21 +8,29 @@ namespace Voyage.Compiler.Parsing;
 /// (no parser generator). Converts a token stream (from `Lexing/`) into
 /// an AST.
 ///
-/// SCOPE — this is intentionally the *first milestone only*, per
-/// Parsing/README.md: enough grammar to parse `print("Hello, Voyage.")`
-/// and nothing more. Concretely, this parser currently supports:
+/// SCOPE — this parser's grammar coverage grows incrementally; see
+/// src/Voyage.Compiler/Parsing/README.md for the authoritative current
+/// scope and what's next. As of this revision, supported:
 ///   - Top-level expression statements
+///   - `let`/`var` binding statements with an initializer (no explicit
+///     `: Type` annotation yet — recognized and reported, not silently
+///     dropped)
 ///   - Call expressions: `callee(arg, arg, ...)`
+///   - Binary/unary operators per grammar.md's "Operator Precedence and
+///     Associativity" table (||, &&, comparison, ??, +/-, */%, unary
+///     -/!) — range operators (`..&lt;`, `...`) are recognized by the
+///     lexer but not yet wired into this precedence ladder, since no
+///     grammar construct (`for`-`in`) consumes them yet
 ///   - Primary expressions: identifiers, string/integer/float/boolean/nil
 ///     literals, and parenthesized expressions `(expr)`
 ///
 /// Explicitly NOT yet supported (each reported as a diagnostic + an
 /// `UnsupportedStatement`/`ErrorExpression` recovery node, not a crash):
-///   - Any declaration (`let`, `var`, `func`, `struct`, `enum`,
-///     `protocol`, `extension`, `actor`, ...)
+///   - Any other declaration (`func`, `struct`, `enum`, `protocol`,
+///     `extension`, `actor`, ...)
 ///   - Any control flow (`if`, `switch`, `for`, `while`, ...)
 ///   - String interpolation (`"\(...)"`)
-///   - Binary/unary operators, member access (`.`), subscripting
+///   - Member access (`.`), subscripting, ternary, `as`-casting
 /// Every one of these is a real next-milestone item, not an oversight —
 /// growing this parser outward from here is the expected path.
 /// </summary>
@@ -35,7 +43,6 @@ public sealed class Parser
     // a much more useful message than a generic parse error.
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
-        TokenKind.KwLet, TokenKind.KwVar,
         TokenKind.KwFunc, TokenKind.KwStruct, TokenKind.KwEnum,
         TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
         TokenKind.KwIf, TokenKind.KwGuard, TokenKind.KwSwitch,
@@ -146,6 +153,11 @@ public sealed class Parser
 
     private Statement ParseStatement()
     {
+        if (Check(TokenKind.KwLet) || Check(TokenKind.KwVar))
+        {
+            return ParseBindingStatement();
+        }
+
         if (UnsupportedStatementStarts.Contains(Current.Kind))
         {
             return ParseUnsupportedStatement();
@@ -154,9 +166,74 @@ public sealed class Parser
         var start = Current.Span.Start;
         var expr = ParseExpression();
         var end = Current.Span.Start; // position right after the expression
+        ExpectStatementTerminator();
+        return new ExpressionStatement(expr, new SourceSpan(start, end));
+    }
 
-        // A statement ends at a newline, EOF, or an optional semicolon
-        // (grammar.md: semicolons are an optional same-line separator).
+    /// <summary>
+    /// Parses `let`/`var` NAME [: Type] = expr. The `: Type` annotation
+    /// form is recognized (so it doesn't get misread as something else)
+    /// but not yet implemented — see grammar.md's "Parser implementation
+    /// note" under Section 2. A binding with no initializer at all is
+    /// treated as an unsupported statement, same recovery contract as
+    /// every other not-yet-supported construct.
+    /// </summary>
+    private Statement ParseBindingStatement()
+    {
+        var start = Current.Span.Start;
+        var isMutable = Current.Kind == TokenKind.KwVar;
+        Advance(); // consume 'let' / 'var'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a name after 'let'/'var'.");
+        var name = nameToken.Text;
+
+        if (Check(TokenKind.Colon))
+        {
+            _diagnostics.Report(new Diagnostic(
+                DiagnosticSeverity.Warning,
+                "Explicit type annotations on let/var bindings are not yet supported " +
+                "by this parser milestone (see grammar.md Section 2 and " +
+                "src/Voyage.Compiler/Parsing/README.md). The annotation is being ignored; " +
+                "the binding's type will still need to be inferred from its initializer.",
+                SourceSpan.At(Current.Span.Start)));
+
+            Advance(); // consume ':'
+            while (!Check(TokenKind.Equal) && !Check(TokenKind.Newline) && !IsAtEnd)
+            {
+                Advance();
+            }
+        }
+
+        if (!Check(TokenKind.Equal))
+        {
+            _diagnostics.Report(new Diagnostic(
+                DiagnosticSeverity.Error,
+                "Expected '=' — bindings without an initializer are not yet supported " +
+                "by this parser milestone.",
+                SourceSpan.At(Current.Span.Start)));
+
+            while (!Check(TokenKind.Newline) && !IsAtEnd)
+            {
+                Advance();
+            }
+            return new UnsupportedStatement(new SourceSpan(start, Current.Span.Start));
+        }
+
+        Advance(); // consume '='
+        var initializer = ParseExpression();
+        var end = Current.Span.Start;
+        ExpectStatementTerminator();
+        return new BindingStatement(isMutable, name, initializer, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// A statement ends at a newline, EOF, or an optional semicolon
+    /// (grammar.md: semicolons are an optional same-line separator).
+    /// Shared by every statement kind so the terminator contract stays
+    /// uniform as more statement kinds are added.
+    /// </summary>
+    private void ExpectStatementTerminator()
+    {
         if (!Check(TokenKind.Newline) && !IsAtEnd && !Check(TokenKind.Semicolon))
         {
             _diagnostics.Report(new Diagnostic(
@@ -165,8 +242,6 @@ public sealed class Parser
                 SourceSpan.At(Current.Span.Start)));
         }
         Match(TokenKind.Semicolon);
-
-        return new ExpressionStatement(expr, new SourceSpan(start, end));
     }
 
     /// <summary>
@@ -199,7 +274,139 @@ public sealed class Parser
     // Expressions
     // ----------------------------------------------------------------
 
-    private Expression ParseExpression() => ParsePostfix(ParsePrimary());
+    // ----------------------------------------------------------------
+    // Expressions — precedence ladder
+    // ----------------------------------------------------------------
+    // Mirrors grammar.md's "Operator Precedence and Associativity"
+    // table, itself adapted from Swift's real precedencegroup chain
+    // (stdlib/public/core/Policy.swift). Each level parses everything
+    // at higher precedence first, then loops/recurses for its own
+    // operator(s) — the standard hand-written-recursive-descent pattern
+    // for expression precedence (ADR-0010: no parser generator, no
+    // separate precedence-table-driven Pratt parser either — this ladder
+    // is the straightforward hand-written equivalent).
+
+    private Expression ParseExpression() => ParseNilCoalescing();
+
+    /// <summary>`??` — right-associative, per grammar.md.</summary>
+    private Expression ParseNilCoalescing()
+    {
+        var left = ParseLogicalOr();
+        if (Match(TokenKind.QuestionQuestion))
+        {
+            var right = ParseNilCoalescing(); // recurse (not loop) for right-associativity
+            return new BinaryExpression(left, BinaryOperator.NilCoalescing, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalOr()
+    {
+        var left = ParseLogicalAnd();
+        while (Match(TokenKind.PipePipe))
+        {
+            var right = ParseLogicalAnd();
+            left = new BinaryExpression(left, BinaryOperator.LogicalOr, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalAnd()
+    {
+        var left = ParseComparison();
+        while (Match(TokenKind.AmpAmp))
+        {
+            var right = ParseComparison();
+            left = new BinaryExpression(left, BinaryOperator.LogicalAnd, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    /// <summary>
+    /// Comparison operators are non-chaining in voyage-lang, matching
+    /// Swift (`a &lt; b &lt; c` is not valid) — parsed with `if`, not
+    /// `while`, so at most one comparison operator applies per level.
+    /// </summary>
+    private Expression ParseComparison()
+    {
+        var left = ParseAdditive();
+        if (TryGetComparisonOperator(Current.Kind, out var op))
+        {
+            Advance();
+            var right = ParseAdditive();
+            return new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseAdditive()
+    {
+        var left = ParseMultiplicative();
+        while (Check(TokenKind.Plus) || Check(TokenKind.Minus))
+        {
+            var op = Current.Kind == TokenKind.Plus ? BinaryOperator.Add : BinaryOperator.Subtract;
+            Advance();
+            var right = ParseMultiplicative();
+            left = new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseMultiplicative()
+    {
+        var left = ParseUnary();
+        while (Check(TokenKind.Star) || Check(TokenKind.Slash) || Check(TokenKind.Percent))
+        {
+            var op = Current.Kind switch
+            {
+                TokenKind.Star => BinaryOperator.Multiply,
+                TokenKind.Slash => BinaryOperator.Divide,
+                _ => BinaryOperator.Modulo,
+            };
+            Advance();
+            var right = ParseUnary();
+            left = new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    /// <summary>
+    /// Unary `-` (negation) and `!` (logical not), binding tighter than
+    /// every binary operator above. Postfix forms (calls) bind tighter
+    /// still — see <see cref="ParsePostfix"/>.
+    /// </summary>
+    private Expression ParseUnary()
+    {
+        if (Check(TokenKind.Minus) || Check(TokenKind.Bang))
+        {
+            var start = Current.Span.Start;
+            var op = Current.Kind == TokenKind.Minus ? UnaryOperator.Negate : UnaryOperator.LogicalNot;
+            Advance();
+            var operand = ParseUnary(); // allows stacking, e.g. `!!flag`, `--x` (as double negation)
+            return new UnaryExpression(op, operand, new SourceSpan(start, operand.Span.End));
+        }
+        return ParsePostfix(ParsePrimary());
+    }
+
+    private static bool TryGetComparisonOperator(TokenKind kind, out BinaryOperator op)
+    {
+        switch (kind)
+        {
+            case TokenKind.EqualEqual: op = BinaryOperator.Equal; return true;
+            case TokenKind.BangEqual: op = BinaryOperator.NotEqual; return true;
+            case TokenKind.Less: op = BinaryOperator.Less; return true;
+            case TokenKind.LessEqual: op = BinaryOperator.LessEqual; return true;
+            case TokenKind.Greater: op = BinaryOperator.Greater; return true;
+            case TokenKind.GreaterEqual: op = BinaryOperator.GreaterEqual; return true;
+            default: op = default; return false;
+        }
+    }
 
     /// <summary>
     /// Handles postfix constructs applied to a primary expression. Only

@@ -44,6 +44,11 @@ public static class AstPrinter
                 Line($"UnsupportedStatement @ {stmt.Span}");
                 break;
 
+            case BindingStatement stmt:
+                Line($"BindingStatement {(stmt.IsMutable ? "var" : "let")} '{stmt.Name}' @ {stmt.Span}");
+                WriteLabeled("initializer", stmt.Initializer, sb, indent + 1);
+                break;
+
             case CallExpression call:
                 Line($"CallExpression @ {call.Span}");
                 WriteLabeled("callee", call.Callee, sb, indent + 1);
@@ -88,6 +93,17 @@ public static class AstPrinter
             case ParenthesizedExpression paren:
                 Line($"ParenthesizedExpression @ {paren.Span}");
                 Write(paren.Inner, sb, indent + 1);
+                break;
+
+            case BinaryExpression bin:
+                Line($"BinaryExpression {bin.Operator} @ {bin.Span}");
+                WriteLabeled("left", bin.Left, sb, indent + 1);
+                WriteLabeled("right", bin.Right, sb, indent + 1);
+                break;
+
+            case UnaryExpression un:
+                Line($"UnaryExpression {un.Operator} @ {un.Span}");
+                WriteLabeled("operand", un.Operand, sb, indent + 1);
                 break;
 
             case ErrorExpression err:

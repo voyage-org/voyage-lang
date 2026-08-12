@@ -138,7 +138,8 @@ why, if you're wondering.
 - [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 10 ADRs
 - [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
 - [x] Parser first milestone → `samples/hello.voy` round-trips to an AST dump (`src/Voyage.Compiler/Parsing/`), 67/67 checks passing across Lexing/ + Parsing/
-- [ ] Parser: grow grammar outward (`let`/`var`, `func`, control flow, `struct`/`enum`, ...)
+- [x] Parser: `let`/`var` bindings, binary/unary operators with full precedence table (`grammar.md`'s "Operator Precedence and Associativity", verified against Swift's real `precedencegroup` chain) — 91/91 checks passing
+- [ ] Parser: grow grammar outward (`func`, control flow, `struct`/`enum`, ...)
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`
