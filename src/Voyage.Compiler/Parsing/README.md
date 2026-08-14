@@ -29,6 +29,15 @@ Implemented:
   `??`, `+`/`-`, `*`/`/`/`%`, unary `-`/`!`
 - Primary expressions: identifiers, string/integer/float/boolean/nil
   literals, parenthesized expressions
+- `func` declarations: `func name(a: Int, b: Int) -> Int { ... }` —
+  params, an optional `-> Type` return type (omitted means implicit
+  Void), and a `{ ... }` body of ordinary statements (so `return`,
+  nested `func`s, `let`/`var`, etc. all just work inside a body with no
+  special-casing)
+- `return` statements, with or without a value
+- Minimal type references for param/return types: a bare identifier
+  with an optional trailing `?` (`Int`, `String?`) — see below for what
+  this deliberately excludes
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -38,9 +47,17 @@ supported and unsupported constructs still parses as far as it can:
   annotation is recognized, warned about, and ignored; the statement
   still parses using just the initializer)
 - `let`/`var` with no initializer at all
-- Any other declaration (`func`, `struct`, `enum`, `protocol`,
-  `extension`, `actor`, ...)
-- Any control flow (`if`, `switch`, `for`, `while`, ...)
+- Generic function parameters and `where` clauses (`func identity<T>(_
+  value: T) -> T`) — nor the Swift-style external parameter labels
+  (`_ value: T`) that generic examples in `grammar.md` use; parameters
+  are currently just `name: Type`
+- Richer type syntax: generic type arguments (`Array<T>`), array sugar
+  (`[T]`), function types (`(Int) -> String`), and keyword-spelled type
+  forms (`Self`, `any P`, `some P`) — only bare-identifier types (plus
+  trailing `?`) are parsed so far
+- Any other declaration (`struct`, `enum`, `protocol`, `extension`,
+  `actor`, ...)
+- Any other control flow (`if`, `switch`, `for`, `while`, ...)
 - String interpolation (`"\(...)"`)
 - Member access (`.`), subscripting, ternary, `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
@@ -57,9 +74,11 @@ set up to extend this way as later grammar constructs are added.
 
 ## Next milestone
 
-`func` declarations (params, return type, body) — needs bindings and
-operators as building blocks, both of which now exist. After that:
-control flow (`if`/`switch`) → `struct`/`enum` → `protocol`/`extension` →
-error handling (`throws`) → concurrency (`actor`/`task{}`, saved for last
-as the most complex slice). No fixed order is binding — pick whichever
-construct unblocks the most useful next test case.
+Control flow (`if`/`switch`) is the natural next slice — function bodies
+can now hold arbitrary statements, so `if`/`switch` inside a body is
+immediately testable once added. After that: `struct`/`enum` →
+`protocol`/`extension` → generics (`<T>`/`where`, unblocking the
+external-parameter-label form of `func` params too) → error handling
+(`throws`) → concurrency (`actor`/`task{}`, saved for last as the most
+complex slice). No fixed order is binding — pick whichever construct
+unblocks the most useful next test case.

@@ -139,7 +139,8 @@ why, if you're wondering.
 - [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
 - [x] Parser first milestone → `samples/hello.voy` round-trips to an AST dump (`src/Voyage.Compiler/Parsing/`), 67/67 checks passing across Lexing/ + Parsing/
 - [x] Parser: `let`/`var` bindings, binary/unary operators with full precedence table (`grammar.md`'s "Operator Precedence and Associativity", verified against Swift's real `precedencegroup` chain) — 91/91 checks passing
-- [ ] Parser: grow grammar outward (`func`, control flow, `struct`/`enum`, ...)
+- [x] Parser: `func` declarations (params, optional `-> Type` return type, `{ ... }` body), `return` statements, minimal type references (`Int`, `String?`) — 106/106 checks passing
+- [ ] Parser: grow grammar outward (control flow (`if`/`switch`), `struct`/`enum`, `protocol`/`extension`, generics, ...)
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

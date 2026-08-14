@@ -345,14 +345,15 @@ CompilationUnit ParseSource(string source, out InMemoryDiagnosticSink sink)
 Console.WriteLine();
 Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully ===");
 {
-    // `func` is real, valid voyage-lang (grammar.md Section 3) but this
-    // milestone's parser doesn't implement declarations yet (`let`/`var`
-    // bindings are now supported — see the "Binding statements" section
-    // below — but `func` and other declarations still aren't). It should
-    // report a diagnostic and produce an UnsupportedStatement rather
-    // than crashing or silently losing the rest of the file.
-    var unit = ParseSource("func f() {}\nprint(\"after\")", out var sink);
-    Check("exactly one diagnostic reported (the 'func' warning)",
+    // `struct` is real, valid voyage-lang (grammar.md Section 4) but
+    // this milestone's parser doesn't implement it yet (`let`/`var`
+    // bindings and `func` declarations are now supported — see the
+    // sections below — but `struct` and other type declarations
+    // aren't). It should report a diagnostic and produce an
+    // UnsupportedStatement rather than crashing or silently losing the
+    // rest of the file.
+    var unit = ParseSource("struct Point {}\nprint(\"after\")", out var sink);
+    Check("exactly one diagnostic reported (the 'struct' warning)",
         sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
     Check("two statements produced despite the unsupported first one",
         unit.Statements.Count == 2, $"got {unit.Statements.Count}");
@@ -556,6 +557,120 @@ Console.WriteLine("=== Operator precedence and associativity ===");
                 Initializer: BinaryExpression { Operator: BinaryOperator.Add, Left: IntegerLiteralExpression { Value: 1 }, Right: IntegerLiteralExpression { Value: 2 } },
             },
         ]);
+}
+
+// ---------------------------------------------------------------------
+// 14. Function declarations: params, return type, body, return statements
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Function declarations ===");
+{
+    // The grammar.md Section 3 basic example: typed params, a return
+    // type, and an explicit `return` in a multi-... well, single-
+    // statement body.
+    var unit = ParseSource("func add(a: Int, b: Int) -> Int { return a + b }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'func add(a: Int, b: Int) -> Int { return a + b }' parses as expected",
+        unit.Statements is
+        [
+            FunctionDeclaration
+            {
+                Name: "add",
+                Parameters:
+                [
+                    Parameter { Name: "a", Type: TypeNode { Name: "Int", IsOptional: false } },
+                    Parameter { Name: "b", Type: TypeNode { Name: "Int", IsOptional: false } },
+                ],
+                ReturnType: TypeNode { Name: "Int", IsOptional: false },
+                Body:
+                [
+                    ReturnStatement
+                    {
+                        Value: BinaryExpression
+                        {
+                            Operator: BinaryOperator.Add,
+                            Left: IdentifierExpression { Name: "a" },
+                            Right: IdentifierExpression { Name: "b" },
+                        },
+                    },
+                ],
+            },
+        ]);
+}
+{
+    // Single-expression body: no `return` keyword needed at the parse
+    // level (ADR-0005 implicit return is a Lowering concern) — the
+    // body is just an ExpressionStatement, same as any other statement.
+    // Also exercises the "no trailing newline before `}`" terminator
+    // relaxation, and a `String?` optional return type. (Plain string
+    // literal, not interpolated — string interpolation is still a
+    // separate not-yet-supported parser feature; see section 11.)
+    var unit = ParseSource("func greet(name: String) -> String? { \"Hello there!\" }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("single-expression body with optional return type parses",
+        unit.Statements is
+        [
+            FunctionDeclaration
+            {
+                Name: "greet",
+                Parameters: [Parameter { Name: "name", Type: TypeNode { Name: "String", IsOptional: false } }],
+                ReturnType: TypeNode { Name: "String", IsOptional: true },
+                Body: [ExpressionStatement],
+            },
+        ]);
+}
+{
+    // No params, no return type -> implicit Void, empty body.
+    var unit = ParseSource("func doNothing() {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'func doNothing() {}' parses with no params, no return type, empty body",
+        unit.Statements is
+        [
+            FunctionDeclaration
+            {
+                Name: "doNothing",
+                Parameters: [],
+                ReturnType: null,
+                Body: [],
+            },
+        ]);
+}
+{
+    // Bare `return` with no value.
+    var unit = ParseSource("func noop() {\n    return\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("bare 'return' with no value parses as ReturnStatement { Value: null }",
+        unit.Statements is
+        [
+            FunctionDeclaration { Body: [ReturnStatement { Value: null }] },
+        ]);
+}
+{
+    // Functions nest inside function bodies as ordinary statements —
+    // no special-casing needed since ParseBlockStatements just calls
+    // back into ParseStatement.
+    var unit = ParseSource("func outer() {\n    func inner() -> Int { return 1 }\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("a nested 'func' inside a function body parses correctly",
+        unit.Statements is
+        [
+            FunctionDeclaration
+            {
+                Name: "outer",
+                Body: [FunctionDeclaration { Name: "inner", ReturnType: TypeNode { Name: "Int" } }],
+            },
+        ]);
+}
+{
+    // AST dump sanity check via AstPrinter, same style as section 9's
+    // hello.voy dump — exercises every new node kind's Write() case.
+    var unit = ParseSource("func add(a: Int, b: Int) -> Int { return a + b }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0);
+    var dump = AstPrinter.Print(unit);
+    Check("AST dump mentions FunctionDeclaration 'add'", dump.Contains("FunctionDeclaration 'add'"));
+    Check("AST dump mentions both Parameter nodes", dump.Contains("Parameter 'a'") && dump.Contains("Parameter 'b'"));
+    Check("AST dump mentions the Int TypeNodes", dump.Contains("TypeNode 'Int'"));
+    Check("AST dump mentions ReturnStatement", dump.Contains("ReturnStatement"));
 }
 
 // ---------------------------------------------------------------------

@@ -23,12 +23,18 @@ namespace Voyage.Compiler.Parsing;
 ///     grammar construct (`for`-`in`) consumes them yet
 ///   - Primary expressions: identifiers, string/integer/float/boolean/nil
 ///     literals, and parenthesized expressions `(expr)`
+///   - `func` declarations: `func NAME(NAME: Type, ...) [-&gt; Type] { ... }`
+///     — bodies are just nested statement lists (so `return`, nested
+///     `func`s, etc. all just work), but generic parameters (`&lt;T&gt;`/
+///     `where`) and Swift-style external parameter labels are not yet
+///     parsed (see FunctionDeclaration/Parameter/TypeNode remarks)
+///   - `return` statements, with or without a value
 ///
 /// Explicitly NOT yet supported (each reported as a diagnostic + an
 /// `UnsupportedStatement`/`ErrorExpression` recovery node, not a crash):
-///   - Any other declaration (`func`, `struct`, `enum`, `protocol`,
-///     `extension`, `actor`, ...)
-///   - Any control flow (`if`, `switch`, `for`, `while`, ...)
+///   - Any other declaration (`struct`, `enum`, `protocol`, `extension`,
+///     `actor`, ...)
+///   - Any other control flow (`if`, `switch`, `for`, `while`, ...)
 ///   - String interpolation (`"\(...)"`)
 ///   - Member access (`.`), subscripting, ternary, `as`-casting
 /// Every one of these is a real next-milestone item, not an oversight —
@@ -43,11 +49,11 @@ public sealed class Parser
     // a much more useful message than a generic parse error.
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
-        TokenKind.KwFunc, TokenKind.KwStruct, TokenKind.KwEnum,
+        TokenKind.KwStruct, TokenKind.KwEnum,
         TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
         TokenKind.KwIf, TokenKind.KwGuard, TokenKind.KwSwitch,
         TokenKind.KwFor, TokenKind.KwWhile, TokenKind.KwRepeat,
-        TokenKind.KwReturn, TokenKind.KwBreak, TokenKind.KwContinue,
+        TokenKind.KwBreak, TokenKind.KwContinue,
         TokenKind.KwThrow, TokenKind.KwDo, TokenKind.KwImport,
         TokenKind.KwDefer, TokenKind.KwUsing, TokenKind.KwAtomic,
     ];
@@ -158,6 +164,16 @@ public sealed class Parser
             return ParseBindingStatement();
         }
 
+        if (Check(TokenKind.KwFunc))
+        {
+            return ParseFunctionDeclaration();
+        }
+
+        if (Check(TokenKind.KwReturn))
+        {
+            return ParseReturnStatement();
+        }
+
         if (UnsupportedStatementStarts.Contains(Current.Kind))
         {
             return ParseUnsupportedStatement();
@@ -227,14 +243,129 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// A statement ends at a newline, EOF, or an optional semicolon
-    /// (grammar.md: semicolons are an optional same-line separator).
-    /// Shared by every statement kind so the terminator contract stays
-    /// uniform as more statement kinds are added.
+    /// Parses `func` NAME `(` [PARAM (`,` PARAM)*] `)` [`->` Type] `{` STATEMENT* `}`.
+    /// Generic parameters (`&lt;T&gt;`/`where`) are not yet recognized — see
+    /// FunctionDeclaration's remarks and Parsing/README.md. A missing
+    /// return type is fine (implicit Void); a single-expression body is
+    /// just parsed as one ExpressionStatement, with implicit-return
+    /// lowering left to a later phase per ADR-0005.
+    /// </summary>
+    private Statement ParseFunctionDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'func'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a function name after 'func'.");
+        var name = nameToken.Text;
+
+        Expect(TokenKind.LParen, "Expected '(' to begin the parameter list.");
+        var parameters = new List<Parameter>();
+        if (!Check(TokenKind.RParen))
+        {
+            parameters.Add(ParseParameter());
+            while (Match(TokenKind.Comma))
+            {
+                parameters.Add(ParseParameter());
+            }
+        }
+        Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
+
+        TypeNode? returnType = null;
+        if (Match(TokenKind.Arrow))
+        {
+            returnType = ParseType();
+        }
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the function body.");
+        var body = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
+
+        return new FunctionDeclaration(name, parameters, returnType, body, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses a single "NAME: Type" parameter. Swift-style external
+    /// labels (a separate external name, or `_` to suppress it) are not
+    /// yet recognized — see Parameter's remarks.
+    /// </summary>
+    private Parameter ParseParameter()
+    {
+        var nameToken = Expect(TokenKind.Identifier, "Expected a parameter name.");
+        Expect(TokenKind.Colon, "Expected ':' after parameter name.");
+        var type = ParseType();
+        return new Parameter(nameToken.Text, type, new SourceSpan(nameToken.Span.Start, type.Span.End));
+    }
+
+    /// <summary>
+    /// Parses a minimal type reference: a bare identifier with an
+    /// optional trailing `?`. See TypeNode's remarks for what's
+    /// deliberately not yet handled here.
+    /// </summary>
+    private TypeNode ParseType()
+    {
+        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        if (Check(TokenKind.Question))
+        {
+            var question = Advance();
+            return new TypeNode(nameToken.Text, true, new SourceSpan(nameToken.Span.Start, question.Span.End));
+        }
+        return new TypeNode(nameToken.Text, false, nameToken.Span);
+    }
+
+    /// <summary>
+    /// Parses the statements inside a `{ ... }` block, stopping at the
+    /// closing brace (left for the caller to Expect, so the caller's
+    /// span calculation can include it). Shared by function bodies now;
+    /// intended to be shared by if/while/for/etc. bodies later.
+    /// </summary>
+    private List<Statement> ParseBlockStatements()
+    {
+        var statements = new List<Statement>();
+        SkipNewlines();
+        while (!Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            statements.Add(ParseStatement());
+            SkipNewlines();
+        }
+        return statements;
+    }
+
+    /// <summary>
+    /// Parses `return` [expr]. A bare `return` (no value) is recognized
+    /// when the next token can't start an expression on the same
+    /// statement — i.e. it's immediately a newline, semicolon, closing
+    /// brace, or EOF.
+    /// </summary>
+    private Statement ParseReturnStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'return'
+
+        Expression? value = null;
+        if (!Check(TokenKind.Newline) && !Check(TokenKind.Semicolon) &&
+            !Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            value = ParseExpression();
+        }
+
+        var end = Current.Span.Start;
+        ExpectStatementTerminator();
+        return new ReturnStatement(value, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// A statement ends at a newline, EOF, an optional semicolon
+    /// (grammar.md: semicolons are an optional same-line separator), or
+    /// a closing brace (so the last statement in a `{ ... }` block —
+    /// e.g. a compact single-expression function body — doesn't need a
+    /// trailing newline before `}`). Shared by every statement kind so
+    /// the terminator contract stays uniform as more statement kinds
+    /// are added.
     /// </summary>
     private void ExpectStatementTerminator()
     {
-        if (!Check(TokenKind.Newline) && !IsAtEnd && !Check(TokenKind.Semicolon))
+        if (!Check(TokenKind.Newline) && !IsAtEnd &&
+            !Check(TokenKind.Semicolon) && !Check(TokenKind.RBrace))
         {
             _diagnostics.Report(new Diagnostic(
                 DiagnosticSeverity.Error,

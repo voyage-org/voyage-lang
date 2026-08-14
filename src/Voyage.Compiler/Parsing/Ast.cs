@@ -101,6 +101,32 @@ public sealed record UnaryExpression(
 public sealed record ErrorExpression(SourceSpan Span) : Expression(Span);
 
 // ----------------------------------------------------------------------
+// Types (minimal — see FunctionDeclaration remarks for current scope)
+// ----------------------------------------------------------------------
+
+/// <summary>
+/// A minimal named type reference, e.g. `Int`, `String`, `String?`.
+/// Scope-limited to a bare identifier with an optional trailing `?`
+/// (Optional&lt;T&gt; sugar) — generic type arguments (`Array&lt;T&gt;`),
+/// array sugar (`[T]`), function types (`(Int) -&gt; String`), and
+/// keyword-spelled type forms (`Self`, `any P`, `some P`, `Optional&lt;T&gt;`
+/// written out) are not yet parsed. This is real, spec'd grammar
+/// (type-system.md), just not yet implemented here — see
+/// Parsing/README.md.
+/// </summary>
+public sealed record TypeNode(string Name, bool IsOptional, SourceSpan Span) : AstNode(Span);
+
+/// <summary>
+/// A single function parameter, e.g. `a: Int` in `func add(a: Int, ...)`.
+/// Scope-limited to "name: Type" — Swift-style external parameter
+/// labels (a separate external label, or `_` to suppress it entirely,
+/// as in `func identity&lt;T&gt;(_ value: T) -&gt; T`) are not yet parsed;
+/// the declared name currently serves as both internal and external
+/// name. See Parsing/README.md.
+/// </summary>
+public sealed record Parameter(string Name, TypeNode Type, SourceSpan Span) : AstNode(Span);
+
+// ----------------------------------------------------------------------
 // Statements
 // ----------------------------------------------------------------------
 
@@ -129,13 +155,35 @@ public sealed record BindingStatement(
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
+/// A function declaration, e.g. `func add(a: Int, b: Int) -&gt; Int { return a + b }`.
+/// `ReturnType` is null when no `-&gt; Type` is written, meaning an
+/// implicit Void return. A single-expression body (ADR-0005 implicit
+/// return, e.g. `func greet() -&gt; String { "hi" }`) is just a
+/// one-element `Body` holding an `ExpressionStatement` — the parser
+/// does not special-case it; turning that last expression into a
+/// return is Lowering's job, per ADR-0005. Generic parameters
+/// (`&lt;T&gt;`/`where`) are not yet parsed — see Parsing/README.md.
+/// </summary>
+public sealed record FunctionDeclaration(
+    string Name,
+    IReadOnlyList<Parameter> Parameters,
+    TypeNode? ReturnType,
+    IReadOnlyList<Statement> Body,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// A `return` statement, e.g. `return a + b` or a bare `return` with no value.
+/// </summary>
+public sealed record ReturnStatement(Expression? Value, SourceSpan Span) : Statement(Span);
+
+/// <summary>
 /// Placeholder for a statement the parser recognized the start of but
-/// doesn't yet know how to parse (e.g. `let`, `if`, `func` — anything
-/// beyond a bare expression statement). Rather than crashing or silently
-/// dropping content, the parser reports a diagnostic and produces one of
-/// these, carrying the span of what it skipped, so a file mixing
-/// already-supported and not-yet-supported constructs still parses as
-/// far as it can.
+/// doesn't yet know how to parse (e.g. `let`, `if` — anything beyond a
+/// bare expression statement, `let`/`var` binding, or `func`
+/// declaration). Rather than crashing or silently dropping content, the
+/// parser reports a diagnostic and produces one of these, carrying the
+/// span of what it skipped, so a file mixing already-supported and
+/// not-yet-supported constructs still parses as far as it can.
 /// </summary>
 public sealed record UnsupportedStatement(SourceSpan Span) : Statement(Span);
 

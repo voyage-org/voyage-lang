@@ -49,6 +49,63 @@ public static class AstPrinter
                 WriteLabeled("initializer", stmt.Initializer, sb, indent + 1);
                 break;
 
+            case FunctionDeclaration fn:
+                Line($"FunctionDeclaration '{fn.Name}' @ {fn.Span}");
+                if (fn.Parameters.Count == 0)
+                {
+                    Line2("parameters: (none)", sb, indent + 1);
+                }
+                else
+                {
+                    Line2("parameters:", sb, indent + 1);
+                    foreach (var p in fn.Parameters)
+                    {
+                        Write(p, sb, indent + 2);
+                    }
+                }
+                if (fn.ReturnType is not null)
+                {
+                    WriteLabeled("returnType", fn.ReturnType, sb, indent + 1);
+                }
+                else
+                {
+                    Line2("returnType: (none, implicit Void)", sb, indent + 1);
+                }
+                if (fn.Body.Count == 0)
+                {
+                    Line2("body: (empty)", sb, indent + 1);
+                }
+                else
+                {
+                    Line2("body:", sb, indent + 1);
+                    foreach (var s in fn.Body)
+                    {
+                        Write(s, sb, indent + 2);
+                    }
+                }
+                break;
+
+            case Parameter p:
+                Line($"Parameter '{p.Name}' @ {p.Span}");
+                Write(p.Type, sb, indent + 1);
+                break;
+
+            case TypeNode t:
+                Line($"TypeNode '{t.Name}{(t.IsOptional ? "?" : "")}' @ {t.Span}");
+                break;
+
+            case ReturnStatement ret:
+                Line($"ReturnStatement @ {ret.Span}");
+                if (ret.Value is not null)
+                {
+                    WriteLabeled("value", ret.Value, sb, indent + 1);
+                }
+                else
+                {
+                    Line2("value: (none)", sb, indent + 1);
+                }
+                break;
+
             case CallExpression call:
                 Line($"CallExpression @ {call.Span}");
                 WriteLabeled("callee", call.Callee, sb, indent + 1);
