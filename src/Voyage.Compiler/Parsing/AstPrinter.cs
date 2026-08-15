@@ -71,18 +71,7 @@ public static class AstPrinter
                 {
                     Line2("returnType: (none, implicit Void)", sb, indent + 1);
                 }
-                if (fn.Body.Count == 0)
-                {
-                    Line2("body: (empty)", sb, indent + 1);
-                }
-                else
-                {
-                    Line2("body:", sb, indent + 1);
-                    foreach (var s in fn.Body)
-                    {
-                        Write(s, sb, indent + 2);
-                    }
-                }
+                WriteStatementList("body", fn.Body, sb, indent + 1);
                 break;
 
             case Parameter p:
@@ -104,6 +93,30 @@ public static class AstPrinter
                 {
                     Line2("value: (none)", sb, indent + 1);
                 }
+                break;
+
+            case IfStatement ifStmt:
+                Line($"IfStatement @ {ifStmt.Span}");
+                WriteLabeled("condition", ifStmt.Condition, sb, indent + 1);
+                WriteStatementList("then", ifStmt.ThenBranch, sb, indent + 1);
+                if (ifStmt.ElseBranch is not null)
+                {
+                    WriteStatementList("else", ifStmt.ElseBranch, sb, indent + 1);
+                }
+                break;
+
+            case WhileStatement whileStmt:
+                Line($"WhileStatement @ {whileStmt.Span}");
+                WriteLabeled("condition", whileStmt.Condition, sb, indent + 1);
+                WriteStatementList("body", whileStmt.Body, sb, indent + 1);
+                break;
+
+            case BreakStatement brk:
+                Line($"BreakStatement @ {brk.Span}");
+                break;
+
+            case ContinueStatement cont:
+                Line($"ContinueStatement @ {cont.Span}");
                 break;
 
             case CallExpression call:
@@ -177,6 +190,25 @@ public static class AstPrinter
     {
         sb.Append(' ', indent * 2).Append(label).Append(":\n");
         Write(node, sb, indent + 1);
+    }
+
+    /// <summary>Prints a labeled list of statements (function/if/while
+    /// bodies), or "(none)"/"(empty)" style placeholder when there are
+    /// none — factored out since function bodies, if-branches, and while
+    /// bodies all share this exact shape.</summary>
+    private static void WriteStatementList(string label, IReadOnlyList<Statement> statements, StringBuilder sb, int indent)
+    {
+        if (statements.Count == 0)
+        {
+            Line2($"{label}: (empty)", sb, indent);
+            return;
+        }
+
+        Line2($"{label}:", sb, indent);
+        foreach (var s in statements)
+        {
+            Write(s, sb, indent + 1);
+        }
     }
 
     private static void Line2(string text, StringBuilder sb, int indent) =>

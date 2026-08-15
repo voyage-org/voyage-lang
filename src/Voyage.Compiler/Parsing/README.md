@@ -38,6 +38,14 @@ Implemented:
 - Minimal type references for param/return types: a bare identifier
   with an optional trailing `?` (`Int`, `String?`) — see below for what
   this deliberately excludes
+- `if`/`else`/`else-if` — `else if` desugars to a single-element else
+  branch holding a nested `IfStatement` (the standard desugaring, so
+  `Semantics/`/`Lowering/` don't need a separate "else-if" concept).
+  `else` must directly follow the `if` body's closing `}` with no
+  newline in between; `else` on its own line isn't yet supported.
+- `while` loops
+- Bare `break`/`continue` (no loop labels — voyage-lang doesn't have
+  loop labels yet)
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -55,9 +63,11 @@ supported and unsupported constructs still parses as far as it can:
   (`[T]`), function types (`(Int) -> String`), and keyword-spelled type
   forms (`Self`, `any P`, `some P`) — only bare-identifier types (plus
   trailing `?`) are parsed so far
+- `if let`/`if case` conditional binding forms — only a plain
+  boolean-valued condition expression is recognized
+- `switch`, `for`-`in`, `guard`, `repeat`-`while`
 - Any other declaration (`struct`, `enum`, `protocol`, `extension`,
   `actor`, ...)
-- Any other control flow (`if`, `switch`, `for`, `while`, ...)
 - String interpolation (`"\(...)"`)
 - Member access (`.`), subscripting, ternary, `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
@@ -90,11 +100,13 @@ and covered by tests.
 
 ## Next milestone
 
-Control flow (`if`/`switch`) is the natural next slice — function bodies
-can now hold arbitrary statements, so `if`/`switch` inside a body is
-immediately testable once added. After that: `struct`/`enum` →
-`protocol`/`extension` → generics (`<T>`/`where`, unblocking the
-external-parameter-label form of `func` params too) → error handling
-(`throws`) → concurrency (`actor`/`task{}`, saved for last as the most
-complex slice). No fixed order is binding — pick whichever construct
-unblocks the most useful next test case.
+`struct`/`enum` — needs no new expression/statement infrastructure
+(bodies reuse the same block-statement machinery), just new declaration
+syntax. After that: `protocol`/`extension` → generics (`<T>`/`where`,
+unblocking the external-parameter-label form of `func` params too) →
+`switch` (a real design question, since meaningful pattern matching needs
+`enum` cases to match against first) → `for`-`in` (needs the range
+operators already lexed but not yet wired into any grammar construct) →
+error handling (`throws`) → concurrency (`actor`/`task{}`, saved for last
+as the most complex slice). No fixed order is binding — pick whichever
+construct unblocks the most useful next test case.

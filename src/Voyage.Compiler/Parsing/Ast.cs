@@ -177,13 +177,45 @@ public sealed record FunctionDeclaration(
 public sealed record ReturnStatement(Expression? Value, SourceSpan Span) : Statement(Span);
 
 /// <summary>
+/// An `if` statement, with an optional else branch. `else if` chains are
+/// represented by the else branch being a single-element list holding
+/// another `IfStatement` — the standard desugaring (`else if X` is
+/// exactly `else { if X { ... } }`), so `Semantics/`/`Lowering/` don't
+/// need a separate "else-if" concept.
+/// `if`-as-expression (grammar.md Section 3's implicit-return form, e.g.
+/// `if cond { "a" } else { "b" }` used as a function body) is not
+/// special-cased here — same as `FunctionDeclaration`, a branch holding
+/// exactly one `ExpressionStatement` is what that form parses to, and
+/// turning it into a value is Lowering's job per ADR-0005.
+/// </summary>
+public sealed record IfStatement(
+    Expression Condition,
+    IReadOnlyList<Statement> ThenBranch,
+    IReadOnlyList<Statement>? ElseBranch,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>A `while` loop.</summary>
+public sealed record WhileStatement(
+    Expression Condition,
+    IReadOnlyList<Statement> Body,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>A bare `break` statement. Labeled break (`break outerLoop`) is
+/// not yet supported — voyage-lang doesn't have loop labels yet.</summary>
+public sealed record BreakStatement(SourceSpan Span) : Statement(Span);
+
+/// <summary>A bare `continue` statement. Same labeled-loop caveat as
+/// <see cref="BreakStatement"/>.</summary>
+public sealed record ContinueStatement(SourceSpan Span) : Statement(Span);
+
+/// <summary>
 /// Placeholder for a statement the parser recognized the start of but
-/// doesn't yet know how to parse (e.g. `let`, `if` — anything beyond a
-/// bare expression statement, `let`/`var` binding, or `func`
-/// declaration). Rather than crashing or silently dropping content, the
-/// parser reports a diagnostic and produces one of these, carrying the
-/// span of what it skipped, so a file mixing already-supported and
-/// not-yet-supported constructs still parses as far as it can.
+/// doesn't yet know how to parse (e.g. `switch`, `for`, `guard` —
+/// anything beyond what's listed in Parsing/README.md's current scope).
+/// Rather than crashing or silently dropping content, the parser reports
+/// a diagnostic and produces one of these, carrying the span of what it
+/// skipped, so a file mixing already-supported and not-yet-supported
+/// constructs still parses as far as it can.
 /// </summary>
 public sealed record UnsupportedStatement(SourceSpan Span) : Statement(Span);
 

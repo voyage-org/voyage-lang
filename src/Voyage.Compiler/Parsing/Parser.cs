@@ -51,9 +51,8 @@ public sealed class Parser
     [
         TokenKind.KwStruct, TokenKind.KwEnum,
         TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
-        TokenKind.KwIf, TokenKind.KwGuard, TokenKind.KwSwitch,
-        TokenKind.KwFor, TokenKind.KwWhile, TokenKind.KwRepeat,
-        TokenKind.KwBreak, TokenKind.KwContinue,
+        TokenKind.KwGuard, TokenKind.KwSwitch,
+        TokenKind.KwFor, TokenKind.KwRepeat,
         TokenKind.KwThrow, TokenKind.KwDo, TokenKind.KwImport,
         TokenKind.KwDefer, TokenKind.KwUsing, TokenKind.KwAtomic,
     ];
@@ -166,6 +165,26 @@ public sealed class Parser
         if (Check(TokenKind.KwReturn))
         {
             return ParseReturnStatement();
+        }
+
+        if (Check(TokenKind.KwIf))
+        {
+            return ParseIfStatement();
+        }
+
+        if (Check(TokenKind.KwWhile))
+        {
+            return ParseWhileStatement();
+        }
+
+        if (Check(TokenKind.KwBreak))
+        {
+            return ParseSimpleKeywordStatement(span => new BreakStatement(span));
+        }
+
+        if (Check(TokenKind.KwContinue))
+        {
+            return ParseSimpleKeywordStatement(span => new ContinueStatement(span));
         }
 
         if (UnsupportedStatementStarts.Contains(Current.Kind))
@@ -345,6 +364,76 @@ public sealed class Parser
         var end = Current.Span.Start;
         ExpectStatementTerminator();
         return new ReturnStatement(value, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses `if` COND `{` STATEMENT* `}` [`else` (`{` STATEMENT* `}` | `if` ...)].
+    /// `if let`/`if case` conditional binding forms (grammar.md Section 6)
+    /// are not yet recognized — only a plain boolean-valued condition
+    /// expression. `else` must directly follow the `if` body's closing
+    /// `}` with no newline in between (matching common Swift style);
+    /// `else` on its own line is not yet supported.
+    /// </summary>
+    private Statement ParseIfStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'if'
+
+        var condition = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'if' body.");
+        var thenBranch = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'if' body.");
+        var end = closeBrace.Span.End;
+
+        List<Statement>? elseBranch = null;
+        if (Check(TokenKind.KwElse))
+        {
+            Advance(); // consume 'else'
+            if (Check(TokenKind.KwIf))
+            {
+                var nestedIf = ParseIfStatement();
+                elseBranch = [nestedIf];
+                end = nestedIf.Span.End;
+            }
+            else
+            {
+                Expect(TokenKind.LBrace, "Expected '{' to begin the 'else' body.");
+                elseBranch = ParseBlockStatements();
+                var elseCloseBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'else' body.");
+                end = elseCloseBrace.Span.End;
+            }
+        }
+
+        return new IfStatement(condition, thenBranch, elseBranch, new SourceSpan(start, end));
+    }
+
+    /// <summary>Parses `while` COND `{` STATEMENT* `}`.</summary>
+    private Statement ParseWhileStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'while'
+
+        var condition = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'while' body.");
+        var body = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'while' body.");
+
+        return new WhileStatement(condition, body, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Shared implementation for bare, argument-less keyword statements
+    /// (`break`, `continue`). Labeled variants (`break outerLoop`) aren't
+    /// supported yet — voyage-lang has no loop labels yet — so this
+    /// always consumes exactly one token. Caller is expected to have
+    /// already checked which keyword is current via `Check(...)`.
+    /// </summary>
+    private Statement ParseSimpleKeywordStatement(Func<SourceSpan, Statement> build)
+    {
+        var token = Advance();
+        var span = token.Span;
+        ExpectStatementTerminator();
+        return build(span);
     }
 
     /// <summary>

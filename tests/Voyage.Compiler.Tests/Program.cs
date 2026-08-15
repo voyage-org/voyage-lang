@@ -674,6 +674,110 @@ Console.WriteLine("=== Function declarations ===");
 }
 
 // ---------------------------------------------------------------------
+// 14. Control flow: if / else / else-if, while, break, continue
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Control flow: if/else, while, break, continue ===");
+{
+    var unit = ParseSource("if x { print(\"yes\") }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("plain 'if' with no else parses correctly",
+        unit.Statements is
+        [
+            IfStatement
+            {
+                Condition: IdentifierExpression { Name: "x" },
+                ThenBranch: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } }],
+                ElseBranch: null,
+            },
+        ]);
+}
+{
+    var unit = ParseSource("if x { print(\"yes\") } else { print(\"no\") }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'if'/'else' both parse correctly",
+        unit.Statements is
+        [
+            IfStatement
+            {
+                ThenBranch: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } }],
+                ElseBranch: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } }],
+            },
+        ]);
+}
+{
+    // else-if desugars to else { if ... }: a single-element ElseBranch
+    // holding another IfStatement, per Ast.cs's IfStatement remarks.
+    var unit = ParseSource("if a { x() } else if b { y() } else { z() }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var outer = unit.Statements[0] as IfStatement;
+    Check("'else if' desugars to a single-element else-branch holding a nested IfStatement",
+        outer?.ElseBranch is
+        [
+            IfStatement
+            {
+                Condition: IdentifierExpression { Name: "b" },
+                ThenBranch: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "y" } } }],
+                ElseBranch: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "z" } } }],
+            },
+        ]);
+}
+{
+    var unit = ParseSource("while running { tick() }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'while' parses correctly",
+        unit.Statements is
+        [
+            WhileStatement
+            {
+                Condition: IdentifierExpression { Name: "running" },
+                Body: [ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "tick" } } }],
+            },
+        ]);
+}
+{
+    var unit = ParseSource("while true { if done { break } continue }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var whileStmt = unit.Statements[0] as WhileStatement;
+    Check("'break' inside a nested 'if' inside a 'while' body parses correctly",
+        whileStmt?.Body is
+        [
+            IfStatement { ThenBranch: [BreakStatement] },
+            ContinueStatement,
+        ]);
+}
+{
+    // A condition itself exercises the operator precedence ladder —
+    // confirms if/while conditions aren't special-cased away from the
+    // full expression grammar.
+    var unit = ParseSource("if a + b > c && ready { go() }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var ifStmt = unit.Statements[0] as IfStatement;
+    Check("'if' condition can be a full binary-operator expression",
+        ifStmt?.Condition is BinaryExpression
+        {
+            Operator: BinaryOperator.LogicalAnd,
+            Left: BinaryExpression { Operator: BinaryOperator.Greater, Left: BinaryExpression { Operator: BinaryOperator.Add } },
+            Right: IdentifierExpression { Name: "ready" },
+        });
+}
+{
+    // switch/for/guard remain explicitly unsupported — confirms adding
+    // if/while didn't accidentally widen the UnsupportedStatementStarts
+    // gap or otherwise change this recovery contract.
+    var unit = ParseSource("switch x {}\nprint(\"after\")", out var sink);
+    Check("'switch' is still reported as unsupported",
+        sink.Diagnostics.Count == 1 && sink.HasErrors == false, // warning, not error
+        string.Join("; ", sink.Diagnostics));
+    Check("parser still recovers after an unsupported 'switch'",
+        unit.Statements is
+        [
+            UnsupportedStatement,
+            ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } },
+        ]);
+}
+
+// ---------------------------------------------------------------------
 Console.WriteLine();
 Console.WriteLine($"=== {passes} passed, {failures} failed ===");
 return failures == 0 ? 0 : 1;
