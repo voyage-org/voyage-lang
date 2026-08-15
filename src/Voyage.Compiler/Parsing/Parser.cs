@@ -80,12 +80,6 @@ public sealed class Parser
 
     private Token Current => _tokens[_pos];
 
-    private Token PeekAt(int offset)
-    {
-        var i = _pos + offset;
-        return i < _tokens.Count ? _tokens[i] : _tokens[^1]; // ^1 is EndOfFile
-    }
-
     private bool IsAtEnd => Current.Kind == TokenKind.EndOfFile;
 
     private Token Advance()
@@ -400,10 +394,6 @@ public sealed class Parser
         var end = Current.Span.Start;
         return new UnsupportedStatement(new SourceSpan(start, end));
     }
-
-    // ----------------------------------------------------------------
-    // Expressions
-    // ----------------------------------------------------------------
 
     // ----------------------------------------------------------------
     // Expressions — precedence ladder

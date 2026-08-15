@@ -72,6 +72,22 @@ than re-inspecting syntax — not yet needed at this milestone's scope, but
 the `AstNode` base type and record-per-construct pattern in `Ast.cs` is
 set up to extend this way as later grammar constructs are added.
 
+## Known limitations
+
+**Malformed declarations can produce multiple redundant diagnostics for
+a single error.** Every `Expect()` call that fails reports a diagnostic
+without consuming the unexpected token (by design — it lets the *next*
+caller decide how to recover), but when several `Expect()` calls chain
+together (e.g. parsing a malformed `func` signature), each one can hit
+the same still-unconsumed token and report its own "expected X" error.
+Confirmed this never causes an infinite loop — `ParsePrimary`'s
+default case always advances past an unrecognized token as the ultimate
+forward-progress guarantee — so this is a diagnostic-*quality* issue
+(noisy output for bad input), not a correctness or safety one. Worth
+addressing once error-recovery UX becomes a priority; not blocking for
+now since every currently-supported construct's happy path is unaffected
+and covered by tests.
+
 ## Next milestone
 
 Control flow (`if`/`switch`) is the natural next slice — function bodies
