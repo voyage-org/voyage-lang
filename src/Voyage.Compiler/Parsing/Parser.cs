@@ -208,9 +208,32 @@ public sealed class Parser
 
         var start = Current.Span.Start;
         var expr = ParseExpression();
+
+        if (TryGetAssignmentOperator(Current.Kind, out var assignOp))
+        {
+            Advance(); // consume the assignment operator
+            var value = ParseExpression();
+            var assignEnd = Current.Span.Start;
+            ExpectStatementTerminator();
+            return new AssignmentStatement(expr, assignOp, value, new SourceSpan(start, assignEnd));
+        }
+
         var end = Current.Span.Start; // position right after the expression
         ExpectStatementTerminator();
         return new ExpressionStatement(expr, new SourceSpan(start, end));
+    }
+
+    private static bool TryGetAssignmentOperator(TokenKind kind, out AssignmentOperator op)
+    {
+        switch (kind)
+        {
+            case TokenKind.Equal: op = AssignmentOperator.Assign; return true;
+            case TokenKind.PlusEqual: op = AssignmentOperator.AddAssign; return true;
+            case TokenKind.MinusEqual: op = AssignmentOperator.SubtractAssign; return true;
+            case TokenKind.StarEqual: op = AssignmentOperator.MultiplyAssign; return true;
+            case TokenKind.SlashEqual: op = AssignmentOperator.DivideAssign; return true;
+            default: op = default; return false;
+        }
     }
 
     /// <summary>

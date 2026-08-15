@@ -40,6 +40,12 @@ public static class AstPrinter
                 Write(stmt.Expression, sb, indent + 1);
                 break;
 
+            case AssignmentStatement stmt:
+                Line($"AssignmentStatement {stmt.Operator} @ {stmt.Span}");
+                WriteLabeled("target", stmt.Target, sb, indent + 1);
+                WriteLabeled("value", stmt.Value, sb, indent + 1);
+                break;
+
             case UnsupportedStatement stmt:
                 Line($"UnsupportedStatement @ {stmt.Span}");
                 break;

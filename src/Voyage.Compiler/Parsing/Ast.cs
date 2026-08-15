@@ -142,6 +142,35 @@ public abstract record Statement(SourceSpan Span) : AstNode(Span);
 public sealed record ExpressionStatement(Expression Expression, SourceSpan Span) : Statement(Span);
 
 /// <summary>
+/// Assignment operators voyage-lang currently defines: plain `=` plus
+/// the compound arithmetic forms already lexed (`+=`, `-=`, `*=`, `/=`).
+/// A dedicated enum for the same reason <see cref="BinaryOperator"/> is
+/// — later phases shouldn't need lexer token knowledge to reason about
+/// what an assignment does.
+/// </summary>
+public enum AssignmentOperator
+{
+    Assign, AddAssign, SubtractAssign, MultiplyAssign, DivideAssign,
+}
+
+/// <summary>
+/// An assignment statement, e.g. `x = 0`, `x += 1`. <see cref="Target"/>
+/// is a full <see cref="Expression"/>, not just an identifier — this is
+/// deliberate: it means once member access (`.`) or subscripting (`[]`)
+/// are added, `self.x = 0` or `items[0] = 0` become valid Target shapes
+/// with no change needed here. Whether a given Target expression is
+/// actually a valid *assignable* thing (an lvalue) is a `Semantics/`
+/// question, not a `Parsing/` one — e.g. `f() = 0` parses today (nothing
+/// stops a call expression from being the Target syntactically) but
+/// isn't semantically meaningful; that check belongs downstream.
+/// </summary>
+public sealed record AssignmentStatement(
+    Expression Target,
+    AssignmentOperator Operator,
+    Expression Value,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
 /// A `let`/`var` binding, e.g. `let x = 10`, `var x: Double`, or
 /// `let z: Int = 30`. At least one of <see cref="DeclaredType"/> or
 /// <see cref="Initializer"/> must be present — a binding with neither

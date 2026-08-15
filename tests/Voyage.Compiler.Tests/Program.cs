@@ -897,23 +897,51 @@ Console.WriteLine("=== struct / enum / case declarations ===");
         ]);
 }
 {
-    // Assignment expressions (`x = 0` mutating an existing binding, as
-    // opposed to `let x = 0` declaring a new one) are not implemented at
-    // all — `=` only exists in the grammar today as part of a `let`/`var`
-    // initializer. This is a real, previously-undocumented gap (found
-    // while writing the struct-with-method test above), not a
-    // recognized-but-unimplemented keyword — so it degrades via the
-    // known diagnostic-cascade path (Parsing/README.md's "Known
-    // limitations") rather than a single clean UnsupportedStatement.
-    // This test exists so that gap stays guarded rather than silently
-    // reappearing if someone "fixes" the cascade without actually
-    // implementing assignment.
-    var unit = ParseSource("x = 0\nprint(\"after\")", out var sink);
-    Check("assignment produces at least one diagnostic (not a silent no-op)",
-        sink.Diagnostics.Count >= 1 && sink.HasErrors, string.Join("; ", sink.Diagnostics));
-    var lastStatement = unit.Statements[^1];
-    Check("parser still recovers to the trailing print statement",
-        lastStatement is ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } });
+    // Assignment expressions are now implemented — `x = 0` mutates an
+    // existing binding (Target is a full Expression, not just an
+    // identifier, so this naturally extends to `self.x = 0` etc. once
+    // member access exists, per AssignmentStatement's remarks in Ast.cs).
+    var unit = ParseSource("x = 0", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("plain assignment parses correctly",
+        unit.Statements is
+        [
+            AssignmentStatement
+            {
+                Target: IdentifierExpression { Name: "x" },
+                Operator: AssignmentOperator.Assign,
+                Value: IntegerLiteralExpression { Value: 0 },
+            },
+        ]);
+}
+{
+    (string source, AssignmentOperator expected)[] cases =
+    [
+        ("x += 1", AssignmentOperator.AddAssign),
+        ("x -= 1", AssignmentOperator.SubtractAssign),
+        ("x *= 2", AssignmentOperator.MultiplyAssign),
+        ("x /= 2", AssignmentOperator.DivideAssign),
+    ];
+    foreach (var (source, expected) in cases)
+    {
+        var unit = ParseSource(source, out var sink);
+        Check($"'{source}' -> {expected}, no diagnostics",
+            sink.Diagnostics.Count == 0 && unit.Statements is [AssignmentStatement { Operator: var op }] && op == expected,
+            string.Join("; ", sink.Diagnostics));
+    }
+}
+{
+    // The struct-method mutation case that originally surfaced this gap
+    // now genuinely works, not just a workaround.
+    var unit = ParseSource("struct Point {\n    var x: Double\n    func reset() {\n        x = 0\n    }\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var structDecl = unit.Statements[0] as StructDeclaration;
+    Check("a mutating assignment inside a struct method now parses correctly",
+        structDecl?.Members is
+        [
+            BindingStatement { Name: "x" },
+            FunctionDeclaration { Name: "reset", Body: [AssignmentStatement { Target: IdentifierExpression { Name: "x" }, Value: IntegerLiteralExpression { Value: 0 } }] },
+        ]);
 }
 
 // ---------------------------------------------------------------------

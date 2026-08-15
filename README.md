@@ -142,7 +142,8 @@ why, if you're wondering.
 - [x] Parser: `func` declarations (params, optional `-> Type` return type, `{ ... }` body), `return` statements, minimal type references (`Int`, `String?`) — 106/106 checks passing
 - [x] Parser: `if`/`else`/`else-if`, `while`, `break`/`continue` — 120/120 checks passing
 - [x] Parser: `struct`/`enum`/`case` declarations, full `let`/`var` type annotations (including annotation-only bindings) — 136/136 checks passing
-- [ ] Parser: assignment expressions (`x = 0`), `protocol`/`extension`, generics, `switch`, `for`-`in`
+- [x] Parser: assignment statements (`=`, `+=`, `-=`, `*=`, `/=`) — 142/142 checks passing
+- [ ] Parser: `protocol`/`extension`, generics, `switch`, `for`-`in`
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

@@ -57,22 +57,18 @@ Implemented:
   associated-value list reuses the same `Parameter` parsing as function
   parameters, since the two have identical shape. Swift's
   comma-separated multi-case shorthand (`case a, b, c`) isn't supported.
+- Assignment statements: `x = 0`, plus the compound forms `+=`, `-=`,
+  `*=`, `/=`. `Target` is a full expression, not just an identifier, so
+  `self.x = 0`/`items[0] = 0`-style targets become valid automatically
+  once member access/subscripting exist — no change needed here when
+  that happens. Whether a given `Target` is actually assignable (an
+  lvalue) is a `Semantics/` question; `Parsing/` stays permissive about
+  shape, same philosophy as `struct`/`enum` member parsing above.
 
-Explicitly **not yet** implemented — most of these produce a clear
+Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
 rather than a crash or silently-dropped content, so a file mixing
 supported and unsupported constructs still parses as far as it can:
-- **Assignment expressions** (`x = 0`, mutating an existing binding, as
-  opposed to `let x = 0` declaring a new one). `=` currently only exists
-  in the grammar as part of a `let`/`var` initializer — there is no
-  general assignment expression/statement at all yet. This doesn't
-  degrade as cleanly as most other gaps: since `=` isn't a
-  recognized-but-unimplemented *keyword* the way `switch` is, it falls
-  through to the generic "expected an expression" path and can trigger
-  the diagnostic-cascade issue below rather than a single clean
-  `UnsupportedStatement`. Tracked by a dedicated test so this doesn't
-  silently reappear if the cascade gets fixed without assignment itself
-  being implemented.
 - Generic function parameters and `where` clauses (`func identity<T>(_
   value: T) -> T`) — nor the Swift-style external parameter labels
   (`_ value: T`) that generic examples in `grammar.md` use; parameters
@@ -118,11 +114,7 @@ and covered by tests.
 
 ## Next milestone
 
-Assignment expressions (`x = 0`) are arguably overdue at this point —
-`struct`/`enum` members can now be declared but not usefully mutated from
-a method body, which is a real, felt gap (discovered while writing this
-milestone's own struct-with-method test). Otherwise: `protocol`/
-`extension` → generics (`<T>`/`where`, unblocking the
+`protocol`/`extension` → generics (`<T>`/`where`, unblocking the
 external-parameter-label form of `func` params too) → `switch` (a real
 design question, since meaningful pattern matching needs `enum` cases to
 match against, which now exist) → `for`-`in` (needs the range operators
