@@ -49,7 +49,6 @@ public sealed class Parser
     // a much more useful message than a generic parse error.
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
-        TokenKind.KwStruct, TokenKind.KwEnum,
         TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
         TokenKind.KwGuard, TokenKind.KwSwitch,
         TokenKind.KwFor, TokenKind.KwRepeat,
@@ -162,6 +161,21 @@ public sealed class Parser
             return ParseFunctionDeclaration();
         }
 
+        if (Check(TokenKind.KwStruct))
+        {
+            return ParseStructDeclaration();
+        }
+
+        if (Check(TokenKind.KwEnum))
+        {
+            return ParseEnumDeclaration();
+        }
+
+        if (Check(TokenKind.KwCase))
+        {
+            return ParseCaseDeclaration();
+        }
+
         if (Check(TokenKind.KwReturn))
         {
             return ParseReturnStatement();
@@ -200,10 +214,9 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses `let`/`var` NAME [: Type] = expr. The `: Type` annotation
-    /// form is recognized (so it doesn't get misread as something else)
-    /// but not yet implemented — see grammar.md's "Parser implementation
-    /// note" under Section 2. A binding with no initializer at all is
+    /// Parses `let`/`var` NAME [: Type] [= expr]. At least one of the
+    /// type annotation or the initializer must be present — a bare
+    /// `let x` with neither has no way to determine its type and is
     /// treated as an unsupported statement, same recovery contract as
     /// every other not-yet-supported construct.
     /// </summary>
@@ -216,29 +229,24 @@ public sealed class Parser
         var nameToken = Expect(TokenKind.Identifier, "Expected a name after 'let'/'var'.");
         var name = nameToken.Text;
 
-        if (Check(TokenKind.Colon))
+        TypeNode? declaredType = null;
+        if (Match(TokenKind.Colon))
         {
-            _diagnostics.Report(new Diagnostic(
-                DiagnosticSeverity.Warning,
-                "Explicit type annotations on let/var bindings are not yet supported " +
-                "by this parser milestone (see grammar.md Section 2 and " +
-                "src/Voyage.Compiler/Parsing/README.md). The annotation is being ignored; " +
-                "the binding's type will still need to be inferred from its initializer.",
-                SourceSpan.At(Current.Span.Start)));
-
-            Advance(); // consume ':'
-            while (!Check(TokenKind.Equal) && !Check(TokenKind.Newline) && !IsAtEnd)
-            {
-                Advance();
-            }
+            declaredType = ParseType();
         }
 
-        if (!Check(TokenKind.Equal))
+        Expression? initializer = null;
+        if (Match(TokenKind.Equal))
+        {
+            initializer = ParseExpression();
+        }
+
+        if (declaredType is null && initializer is null)
         {
             _diagnostics.Report(new Diagnostic(
                 DiagnosticSeverity.Error,
-                "Expected '=' — bindings without an initializer are not yet supported " +
-                "by this parser milestone.",
+                "Expected ':' or '=' — a binding needs either a type annotation " +
+                "or an initializer (or both) so its type can be determined.",
                 SourceSpan.At(Current.Span.Start)));
 
             while (!Check(TokenKind.Newline) && !IsAtEnd)
@@ -248,11 +256,9 @@ public sealed class Parser
             return new UnsupportedStatement(new SourceSpan(start, Current.Span.Start));
         }
 
-        Advance(); // consume '='
-        var initializer = ParseExpression();
         var end = Current.Span.Start;
         ExpectStatementTerminator();
-        return new BindingStatement(isMutable, name, initializer, new SourceSpan(start, end));
+        return new BindingStatement(isMutable, name, declaredType, initializer, new SourceSpan(start, end));
     }
 
     /// <summary>
@@ -294,6 +300,84 @@ public sealed class Parser
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
 
         return new FunctionDeclaration(name, parameters, returnType, body, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `struct` NAME `{` MEMBER* `}`. Members reuse
+    /// `ParseBlockStatements` directly — `var`/`let` properties and
+    /// `func` methods are both just statements already, so no new
+    /// member-parsing infrastructure was needed. Protocol conformance
+    /// clauses (`struct Point: Drawable`) are not yet parsed.
+    /// </summary>
+    private Statement ParseStructDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'struct'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a struct name after 'struct'.");
+        var name = nameToken.Text;
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the struct body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the struct body.");
+
+        return new StructDeclaration(name, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `enum` NAME `{` MEMBER* `}`. Same block-statement reuse as
+    /// `ParseStructDeclaration` — see `EnumDeclaration`'s remarks for why
+    /// the parser doesn't restrict members to only `case` declarations.
+    /// </summary>
+    private Statement ParseEnumDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'enum'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected an enum name after 'enum'.");
+        var name = nameToken.Text;
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the enum body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the enum body.");
+
+        return new EnumDeclaration(name, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `case` NAME [`(` PARAM, ... `)`]. The associated-value list
+    /// reuses `ParseParameter` directly, since `case circle(radius:
+    /// Double)`'s parenthesized list has the exact same shape as a
+    /// function parameter list. Swift's comma-separated multi-case
+    /// shorthand (`case a, b, c`) is not yet supported.
+    /// </summary>
+    private Statement ParseCaseDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'case'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a case name after 'case'.");
+        var name = nameToken.Text;
+        var end = nameToken.Span.End;
+
+        var associatedValues = new List<Parameter>();
+        if (Check(TokenKind.LParen))
+        {
+            Advance(); // consume '('
+            if (!Check(TokenKind.RParen))
+            {
+                associatedValues.Add(ParseParameter());
+                while (Match(TokenKind.Comma))
+                {
+                    associatedValues.Add(ParseParameter());
+                }
+            }
+            var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the case's associated values.");
+            end = closeParen.Span.End;
+        }
+
+        ExpectStatementTerminator();
+        return new CaseDeclaration(name, associatedValues, new SourceSpan(start, end));
     }
 
     /// <summary>

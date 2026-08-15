@@ -46,7 +46,44 @@ public static class AstPrinter
 
             case BindingStatement stmt:
                 Line($"BindingStatement {(stmt.IsMutable ? "var" : "let")} '{stmt.Name}' @ {stmt.Span}");
-                WriteLabeled("initializer", stmt.Initializer, sb, indent + 1);
+                if (stmt.DeclaredType is not null)
+                {
+                    WriteLabeled("declaredType", stmt.DeclaredType, sb, indent + 1);
+                }
+                if (stmt.Initializer is not null)
+                {
+                    WriteLabeled("initializer", stmt.Initializer, sb, indent + 1);
+                }
+                else
+                {
+                    Line2("initializer: (none)", sb, indent + 1);
+                }
+                break;
+
+            case StructDeclaration structDecl:
+                Line($"StructDeclaration '{structDecl.Name}' @ {structDecl.Span}");
+                WriteStatementList("members", structDecl.Members, sb, indent + 1);
+                break;
+
+            case EnumDeclaration enumDecl:
+                Line($"EnumDeclaration '{enumDecl.Name}' @ {enumDecl.Span}");
+                WriteStatementList("members", enumDecl.Members, sb, indent + 1);
+                break;
+
+            case CaseDeclaration caseDecl:
+                Line($"CaseDeclaration '{caseDecl.Name}' @ {caseDecl.Span}");
+                if (caseDecl.AssociatedValues.Count == 0)
+                {
+                    Line2("associatedValues: (none)", sb, indent + 1);
+                }
+                else
+                {
+                    Line2("associatedValues:", sb, indent + 1);
+                    foreach (var p in caseDecl.AssociatedValues)
+                    {
+                        Write(p, sb, indent + 2);
+                    }
+                }
                 break;
 
             case FunctionDeclaration fn:

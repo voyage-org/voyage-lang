@@ -345,15 +345,14 @@ CompilationUnit ParseSource(string source, out InMemoryDiagnosticSink sink)
 Console.WriteLine();
 Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully ===");
 {
-    // `struct` is real, valid voyage-lang (grammar.md Section 4) but
-    // this milestone's parser doesn't implement it yet (`let`/`var`
-    // bindings and `func` declarations are now supported — see the
-    // sections below — but `struct` and other type declarations
-    // aren't). It should report a diagnostic and produce an
+    // `protocol` is real, valid voyage-lang (grammar.md Section 5) but
+    // this milestone's parser doesn't implement it yet (`struct`/`enum`
+    // are now supported — see the sections below — but `protocol` and
+    // `extension` aren't). It should report a diagnostic and produce an
     // UnsupportedStatement rather than crashing or silently losing the
     // rest of the file.
-    var unit = ParseSource("struct Point {}\nprint(\"after\")", out var sink);
-    Check("exactly one diagnostic reported (the 'struct' warning)",
+    var unit = ParseSource("protocol Drawable {}\nprint(\"after\")", out var sink);
+    Check("exactly one diagnostic reported (the 'protocol' warning)",
         sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
     Check("two statements produced despite the unsupported first one",
         unit.Statements.Count == 2, $"got {unit.Statements.Count}");
@@ -399,13 +398,45 @@ Console.WriteLine("=== Binding statements ===");
         unit.Statements is [BindingStatement { IsMutable: true, Name: "y", Initializer: IntegerLiteralExpression { Value: 20 } }]);
 }
 {
-    // Type annotations aren't implemented yet — should warn, ignore the
-    // annotation, and still produce a correct binding from the initializer.
+    // Type annotations are now real — should parse a genuine TypeNode
+    // and use it, with no diagnostics.
     var unit = ParseSource("let z: Int = 30", out var sink);
-    Check("exactly one warning about the unsupported type annotation",
-        sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
-    Check("annotation ignored, binding still parses correctly",
-        unit.Statements is [BindingStatement { IsMutable: false, Name: "z", Initializer: IntegerLiteralExpression { Value: 30 } }]);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("annotation parses as a real TypeNode alongside the initializer",
+        unit.Statements is
+        [
+            BindingStatement
+            {
+                IsMutable: false,
+                Name: "z",
+                DeclaredType: TypeNode { Name: "Int", IsOptional: false },
+                Initializer: IntegerLiteralExpression { Value: 30 },
+            },
+        ]);
+}
+{
+    // Annotation-only bindings (no initializer) are now valid too — this
+    // is exactly the struct-property shape (`var x: Double`).
+    var unit = ParseSource("var x: Double", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("annotation-only binding (no initializer) parses correctly",
+        unit.Statements is
+        [
+            BindingStatement
+            {
+                IsMutable: true,
+                Name: "x",
+                DeclaredType: TypeNode { Name: "Double", IsOptional: false },
+                Initializer: null,
+            },
+        ]);
+}
+{
+    // Optional type annotation: the trailing '?' sugar.
+    var unit = ParseSource("var name: String?", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("optional type annotation ('?') parses correctly",
+        unit.Statements is [BindingStatement { DeclaredType: TypeNode { Name: "String", IsOptional: true } }]);
 }
 {
     // No initializer at all isn't supported yet — should degrade
@@ -775,6 +806,114 @@ Console.WriteLine("=== Control flow: if/else, while, break, continue ===");
             UnsupportedStatement,
             ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } },
         ]);
+}
+
+// ---------------------------------------------------------------------
+// 15. struct / enum / case declarations
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== struct / enum / case declarations ===");
+{
+    var unit = ParseSource("struct Point {\n    var x: Double\n    var y: Double\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("struct with two properties parses correctly",
+        unit.Statements is
+        [
+            StructDeclaration
+            {
+                Name: "Point",
+                Members:
+                [
+                    BindingStatement { IsMutable: true, Name: "x", DeclaredType: TypeNode { Name: "Double" }, Initializer: null },
+                    BindingStatement { IsMutable: true, Name: "y", DeclaredType: TypeNode { Name: "Double" }, Initializer: null },
+                ],
+            },
+        ]);
+}
+{
+    // A struct method — proves member parsing genuinely reuses
+    // ParseBlockStatements (func dispatch works inside a struct body
+    // exactly like it does inside a function body), not a separate
+    // struct-only member grammar. Uses a single-expression body (not a
+    // mutating assignment like `x = 0`) since assignment expressions
+    // aren't implemented at all yet — see Parsing/README.md.
+    var unit = ParseSource("struct Point {\n    var x: Double\n    func describe() -> String {\n        \"a point\"\n    }\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var structDecl = unit.Statements[0] as StructDeclaration;
+    Check("struct with a property and a method both parse correctly",
+        structDecl?.Members is
+        [
+            BindingStatement { Name: "x" },
+            FunctionDeclaration { Name: "describe", Body: [ExpressionStatement { Expression: StringLiteralExpression { Value: "a point" } }] },
+        ]);
+}
+{
+    var unit = ParseSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case rectangle(width: Double, height: Double)\n" +
+        "    case triangle\n" +
+        "}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var enumDecl = unit.Statements[0] as EnumDeclaration;
+    Check("enum with associated-value and bare cases parses correctly",
+        enumDecl?.Members is
+        [
+            CaseDeclaration
+            {
+                Name: "circle",
+                AssociatedValues: [Parameter { Name: "radius", Type: TypeNode { Name: "Double" } }],
+            },
+            CaseDeclaration
+            {
+                Name: "rectangle",
+                AssociatedValues:
+                [
+                    Parameter { Name: "width", Type: TypeNode { Name: "Double" } },
+                    Parameter { Name: "height", Type: TypeNode { Name: "Double" } },
+                ],
+            },
+            CaseDeclaration { Name: "triangle", AssociatedValues: [] },
+        ]);
+}
+{
+    var unit = ParseSource("struct Empty {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("empty struct body parses correctly",
+        unit.Statements is [StructDeclaration { Name: "Empty", Members: [] }]);
+}
+{
+    // Confirms struct/enum didn't accidentally widen the unsupported set:
+    // protocol/extension/switch/for/guard should all still be rejected.
+    var unit = ParseSource("protocol P {}\nextension P {}\nprint(\"after\")", out var sink);
+    Check("both 'protocol' and 'extension' report exactly one diagnostic each",
+        sink.Diagnostics.Count == 2, string.Join("; ", sink.Diagnostics));
+    Check("parser still recovers to the trailing print statement",
+        unit.Statements is
+        [
+            UnsupportedStatement,
+            UnsupportedStatement,
+            ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } },
+        ]);
+}
+{
+    // Assignment expressions (`x = 0` mutating an existing binding, as
+    // opposed to `let x = 0` declaring a new one) are not implemented at
+    // all — `=` only exists in the grammar today as part of a `let`/`var`
+    // initializer. This is a real, previously-undocumented gap (found
+    // while writing the struct-with-method test above), not a
+    // recognized-but-unimplemented keyword — so it degrades via the
+    // known diagnostic-cascade path (Parsing/README.md's "Known
+    // limitations") rather than a single clean UnsupportedStatement.
+    // This test exists so that gap stays guarded rather than silently
+    // reappearing if someone "fixes" the cascade without actually
+    // implementing assignment.
+    var unit = ParseSource("x = 0\nprint(\"after\")", out var sink);
+    Check("assignment produces at least one diagnostic (not a silent no-op)",
+        sink.Diagnostics.Count >= 1 && sink.HasErrors, string.Join("; ", sink.Diagnostics));
+    var lastStatement = unit.Statements[^1];
+    Check("parser still recovers to the trailing print statement",
+        lastStatement is ExpressionStatement { Expression: CallExpression { Callee: IdentifierExpression { Name: "print" } } });
 }
 
 // ---------------------------------------------------------------------

@@ -19,9 +19,10 @@ CompilationUnit @ 1:1-2:1
 
 Implemented:
 - Top-level expression statements
-- `let`/`var` binding statements with an initializer (`let x = 10`) —
-  explicit `: Type` annotations are recognized but not yet parsed (see
-  below)
+- `let`/`var` binding statements: `let x = 10`, `var x: Double` (type
+  annotation, no initializer — the struct-property shape), or
+  `let z: Int = 30` (both). At least one of the annotation or the
+  initializer is required.
 - Call expressions: `callee(arg, arg, ...)`, including nested calls
 - Binary and unary operators, per `grammar.md`'s "Operator Precedence and
   Associativity" table (itself adapted from Swift's real
@@ -35,9 +36,9 @@ Implemented:
   nested `func`s, `let`/`var`, etc. all just work inside a body with no
   special-casing)
 - `return` statements, with or without a value
-- Minimal type references for param/return types: a bare identifier
-  with an optional trailing `?` (`Int`, `String?`) — see below for what
-  this deliberately excludes
+- Minimal type references for param/return/annotation types: a bare
+  identifier with an optional trailing `?` (`Int`, `String?`) — see below
+  for what this deliberately excludes
 - `if`/`else`/`else-if` — `else if` desugars to a single-element else
   branch holding a nested `IfStatement` (the standard desugaring, so
   `Semantics/`/`Lowering/` don't need a separate "else-if" concept).
@@ -46,15 +47,32 @@ Implemented:
 - `while` loops
 - Bare `break`/`continue` (no loop labels — voyage-lang doesn't have
   loop labels yet)
+- `struct`/`enum` declarations — bodies reuse the exact same
+  block-statement machinery as function bodies, so `var`/`let`
+  properties and `func` methods parse inside them automatically with no
+  new member-parsing infrastructure. Protocol conformance clauses
+  (`struct Point: Drawable`) aren't parsed yet.
+- `case` declarations inside `enum` bodies, with or without associated
+  values (`case circle(radius: Double)`, `case triangle`) — the
+  associated-value list reuses the same `Parameter` parsing as function
+  parameters, since the two have identical shape. Swift's
+  comma-separated multi-case shorthand (`case a, b, c`) isn't supported.
 
-Explicitly **not yet** implemented — each of these produces a clear
+Explicitly **not yet** implemented — most of these produce a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
 rather than a crash or silently-dropped content, so a file mixing
 supported and unsupported constructs still parses as far as it can:
-- Explicit `: Type` annotations on `let`/`var` (`let z: Int = 30` — the
-  annotation is recognized, warned about, and ignored; the statement
-  still parses using just the initializer)
-- `let`/`var` with no initializer at all
+- **Assignment expressions** (`x = 0`, mutating an existing binding, as
+  opposed to `let x = 0` declaring a new one). `=` currently only exists
+  in the grammar as part of a `let`/`var` initializer — there is no
+  general assignment expression/statement at all yet. This doesn't
+  degrade as cleanly as most other gaps: since `=` isn't a
+  recognized-but-unimplemented *keyword* the way `switch` is, it falls
+  through to the generic "expected an expression" path and can trigger
+  the diagnostic-cascade issue below rather than a single clean
+  `UnsupportedStatement`. Tracked by a dedicated test so this doesn't
+  silently reappear if the cascade gets fixed without assignment itself
+  being implemented.
 - Generic function parameters and `where` clauses (`func identity<T>(_
   value: T) -> T`) — nor the Swift-style external parameter labels
   (`_ value: T`) that generic examples in `grammar.md` use; parameters
@@ -66,8 +84,7 @@ supported and unsupported constructs still parses as far as it can:
 - `if let`/`if case` conditional binding forms — only a plain
   boolean-valued condition expression is recognized
 - `switch`, `for`-`in`, `guard`, `repeat`-`while`
-- Any other declaration (`struct`, `enum`, `protocol`, `extension`,
-  `actor`, ...)
+- `protocol`, `extension`, `actor`
 - String interpolation (`"\(...)"`)
 - Member access (`.`), subscripting, ternary, `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
@@ -84,14 +101,15 @@ set up to extend this way as later grammar constructs are added.
 
 ## Known limitations
 
-**Malformed declarations can produce multiple redundant diagnostics for
-a single error.** Every `Expect()` call that fails reports a diagnostic
-without consuming the unexpected token (by design — it lets the *next*
-caller decide how to recover), but when several `Expect()` calls chain
-together (e.g. parsing a malformed `func` signature), each one can hit
-the same still-unconsumed token and report its own "expected X" error.
-Confirmed this never causes an infinite loop — `ParsePrimary`'s
-default case always advances past an unrecognized token as the ultimate
+**Malformed declarations (and any input hitting an entirely
+unrecognized token, like a bare assignment) can produce multiple
+redundant diagnostics for a single error.** Every `Expect()` call that
+fails reports a diagnostic without consuming the unexpected token (by
+design — it lets the *next* caller decide how to recover), but when
+several `Expect()`/parse calls chain together, each one can hit the same
+still-unconsumed token and report its own "expected X" error. Confirmed
+this never causes an infinite loop — `ParsePrimary`'s default case
+always advances past an unrecognized token as the ultimate
 forward-progress guarantee — so this is a diagnostic-*quality* issue
 (noisy output for bad input), not a correctness or safety one. Worth
 addressing once error-recovery UX becomes a priority; not blocking for
@@ -100,13 +118,15 @@ and covered by tests.
 
 ## Next milestone
 
-`struct`/`enum` — needs no new expression/statement infrastructure
-(bodies reuse the same block-statement machinery), just new declaration
-syntax. After that: `protocol`/`extension` → generics (`<T>`/`where`,
-unblocking the external-parameter-label form of `func` params too) →
-`switch` (a real design question, since meaningful pattern matching needs
-`enum` cases to match against first) → `for`-`in` (needs the range
-operators already lexed but not yet wired into any grammar construct) →
-error handling (`throws`) → concurrency (`actor`/`task{}`, saved for last
-as the most complex slice). No fixed order is binding — pick whichever
+Assignment expressions (`x = 0`) are arguably overdue at this point —
+`struct`/`enum` members can now be declared but not usefully mutated from
+a method body, which is a real, felt gap (discovered while writing this
+milestone's own struct-with-method test). Otherwise: `protocol`/
+`extension` → generics (`<T>`/`where`, unblocking the
+external-parameter-label form of `func` params too) → `switch` (a real
+design question, since meaningful pattern matching needs `enum` cases to
+match against, which now exist) → `for`-`in` (needs the range operators
+already lexed but not yet wired into any grammar construct) → error
+handling (`throws`) → concurrency (`actor`/`task{}`, saved for last as
+the most complex slice). No fixed order is binding — pick whichever
 construct unblocks the most useful next test case.

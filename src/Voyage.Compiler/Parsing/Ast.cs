@@ -142,16 +142,18 @@ public abstract record Statement(SourceSpan Span) : AstNode(Span);
 public sealed record ExpressionStatement(Expression Expression, SourceSpan Span) : Statement(Span);
 
 /// <summary>
-/// A `let`/`var` binding with an initializer, e.g. `let x = 10`. Per
-/// grammar.md's "Parser implementation note" under Section 2, the
-/// current parser milestone requires an initializer and does not yet
-/// parse an explicit `: Type` annotation — both are real, spec'd
-/// grammar, just not yet implemented here.
+/// A `let`/`var` binding, e.g. `let x = 10`, `var x: Double`, or
+/// `let z: Int = 30`. At least one of <see cref="DeclaredType"/> or
+/// <see cref="Initializer"/> must be present — a binding with neither
+/// (bare `let x`) has no way to determine its type and is not valid
+/// grammar; the parser treats that case as unsupported (see
+/// Parsing/README.md).
 /// </summary>
 public sealed record BindingStatement(
     bool IsMutable,
     string Name,
-    Expression Initializer,
+    TypeNode? DeclaredType,
+    Expression? Initializer,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
@@ -169,6 +171,51 @@ public sealed record FunctionDeclaration(
     IReadOnlyList<Parameter> Parameters,
     TypeNode? ReturnType,
     IReadOnlyList<Statement> Body,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// A `struct` declaration, e.g. `struct Point { var x: Double; var y:
+/// Double }`. `Members` reuses the same block-statement parsing as
+/// function bodies — `var`/`let` properties and `func` methods are both
+/// just statements per <see cref="ParseBlockStatements"/>'s existing
+/// dispatch, so no new member-parsing infrastructure was needed here.
+/// `Protocol` conformance clauses (`struct Point: Drawable { ... }`) are
+/// not yet parsed — see Parsing/README.md.
+/// </summary>
+public sealed record StructDeclaration(
+    string Name,
+    IReadOnlyList<Statement> Members,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// An `enum` declaration, e.g. `enum Shape { case circle(radius: Double)
+/// case rectangle(width: Double, height: Double) }`. `Members` is
+/// typically a list of <see cref="CaseDeclaration"/>s, though the parser
+/// doesn't restrict it to only cases — a `func` method inside an `enum`
+/// parses the same way it would inside a `struct`, since both reuse
+/// `ParseBlockStatements`. Whether that's actually valid voyage-lang is
+/// a `Semantics/` question, not a `Parsing/` one — this parser stays
+/// permissive about *shape* and leaves *validity* to the phase whose job
+/// that is.
+/// </summary>
+public sealed record EnumDeclaration(
+    string Name,
+    IReadOnlyList<Statement> Members,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// A single `case` inside an `enum` body, e.g. `case circle(radius:
+/// Double)` or a bare `case none` with no associated values.
+/// `AssociatedValues` reuses <see cref="Parameter"/> directly — an
+/// associated-value list has the exact same shape as a function
+/// parameter list (`name: Type, name: Type, ...`), so no new node type
+/// was needed for it. Swift's comma-separated multi-case shorthand
+/// (`case a, b, c`) is not yet supported — one `case` per declaration
+/// only.
+/// </summary>
+public sealed record CaseDeclaration(
+    string Name,
+    IReadOnlyList<Parameter> AssociatedValues,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
