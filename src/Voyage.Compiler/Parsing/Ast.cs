@@ -117,14 +117,31 @@ public sealed record ErrorExpression(SourceSpan Span) : Expression(Span);
 public sealed record TypeNode(string Name, bool IsOptional, SourceSpan Span) : AstNode(Span);
 
 /// <summary>
-/// A single function parameter, e.g. `a: Int` in `func add(a: Int, ...)`.
-/// Scope-limited to "name: Type" — Swift-style external parameter
-/// labels (a separate external label, or `_` to suppress it entirely,
-/// as in `func identity&lt;T&gt;(_ value: T) -&gt; T`) are not yet parsed;
-/// the declared name currently serves as both internal and external
-/// name. See Parsing/README.md.
+/// A single function parameter, e.g. `a: Int`, `_ value: T` (suppressed
+/// external label), or `to name: String` (distinct external/internal
+/// labels). `ExternalLabel` is null when suppressed with `_`; otherwise
+/// it's the label callers use, defaulting to the same value as `Name`
+/// when no separate label token is written (Swift's implicit-same-label
+/// default), so downstream phases never need to re-derive that default
+/// themselves.
 /// </summary>
-public sealed record Parameter(string Name, TypeNode Type, SourceSpan Span) : AstNode(Span);
+public sealed record Parameter(string? ExternalLabel, string Name, TypeNode Type, SourceSpan Span) : AstNode(Span);
+
+/// <summary>
+/// A single generic-parameter or `where`-clause constraint, e.g. the `T`
+/// in `&lt;T&gt;`, the `T: Equatable` in `&lt;T: Equatable&gt;` or `where T:
+/// Equatable`, or `T: Drawable &amp; Equatable` (protocol composition via
+/// `&amp;`, grammar.md Section 2). One node type serves both the inline
+/// `&lt;...&gt;` list and the trailing `where` clause since the two have
+/// identical shape (`Identifier [: Identifier (&amp; Identifier)*]`) —
+/// whether a given occurrence *declares* a new type parameter (inline)
+/// or *constrains* an already-declared one (`where`) is a `Semantics/`
+/// distinction, not a parsing one.
+/// </summary>
+public sealed record TypeConstraint(
+    string TypeName,
+    IReadOnlyList<string> ConformedProtocols,
+    SourceSpan Span) : AstNode(Span);
 
 // ----------------------------------------------------------------------
 // Statements
@@ -192,8 +209,10 @@ public sealed record BindingStatement(
 /// return, e.g. `func greet() -&gt; String { "hi" }`) is just a
 /// one-element `Body` holding an `ExpressionStatement` — the parser
 /// does not special-case it; turning that last expression into a
-/// return is Lowering's job, per ADR-0005. Generic parameters
-/// (`&lt;T&gt;`/`where`) are not yet parsed — see Parsing/README.md.
+/// return is Lowering's job, per ADR-0005. `GenericParameters` is the
+/// `&lt;T&gt;`/`&lt;T: Protocol&gt;` list (empty if none); `WhereConstraints`
+/// is the trailing `where T: Protocol` clause (empty if none) —
+/// see <see cref="TypeConstraint"/>.
 ///
 /// `Body` is null when no `{ ... }` was written at all — a *protocol
 /// requirement* (`func draw() -&gt; String` with nothing after it), as
@@ -203,23 +222,29 @@ public sealed record BindingStatement(
 /// </summary>
 public sealed record FunctionDeclaration(
     string Name,
+    IReadOnlyList<TypeConstraint> GenericParameters,
     IReadOnlyList<Parameter> Parameters,
     TypeNode? ReturnType,
+    IReadOnlyList<TypeConstraint> WhereConstraints,
     IReadOnlyList<Statement>? Body,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
-/// A `struct` declaration, e.g. `struct Point: Drawable { var x: Double;
-/// var y: Double }`. `Members` reuses the same block-statement parsing as
-/// function bodies — `var`/`let` properties and `func` methods are both
-/// just statements per <see cref="ParseBlockStatements"/>'s existing
+/// A `struct` declaration, e.g. `struct Stack&lt;T&gt;: Container where T:
+/// Equatable { ... }`. `Members` reuses the same block-statement parsing
+/// as function bodies — `var`/`let` properties and `func` methods are
+/// both just statements per <see cref="ParseBlockStatements"/>'s existing
 /// dispatch, so no new member-parsing infrastructure was needed here.
 /// `ConformedProtocols` is the comma-separated `: A, B` clause after the
-/// name, empty if none was written.
+/// generic parameter list, empty if none was written. See
+/// <see cref="FunctionDeclaration"/>'s remarks for `GenericParameters`/
+/// `WhereConstraints`.
 /// </summary>
 public sealed record StructDeclaration(
     string Name,
+    IReadOnlyList<TypeConstraint> GenericParameters,
     IReadOnlyList<string> ConformedProtocols,
+    IReadOnlyList<TypeConstraint> WhereConstraints,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
@@ -232,12 +257,14 @@ public sealed record StructDeclaration(
 /// `ParseBlockStatements`. Whether that's actually valid voyage-lang is
 /// a `Semantics/` question, not a `Parsing/` one — this parser stays
 /// permissive about *shape* and leaves *validity* to the phase whose job
-/// that is. `ConformedProtocols` is the same `: A, B` clause as
-/// <see cref="StructDeclaration"/>.
+/// that is. `ConformedProtocols`/`GenericParameters`/`WhereConstraints`
+/// are the same shapes as <see cref="StructDeclaration"/>.
 /// </summary>
 public sealed record EnumDeclaration(
     string Name,
+    IReadOnlyList<TypeConstraint> GenericParameters,
     IReadOnlyList<string> ConformedProtocols,
+    IReadOnlyList<TypeConstraint> WhereConstraints,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
@@ -264,11 +291,16 @@ public sealed record CaseDeclaration(
 /// `func` with a real body appearing here either — same permissive-about-
 /// shape philosophy as everywhere else in this file. Inherited-protocol
 /// clauses (`protocol P2: P1 { ... }`) reuse the same conformance-clause
-/// parsing as `struct`/`enum`/`extension`.
+/// parsing as `struct`/`enum`/`extension`. `GenericParameters`/
+/// `WhereConstraints` are parsed the same as everywhere else, though a
+/// bare `protocol` conventionally uses `associatedtype` rather than
+/// `&lt;T&gt;` in real Swift — the parser stays permissive here too.
 /// </summary>
 public sealed record ProtocolDeclaration(
     string Name,
+    IReadOnlyList<TypeConstraint> GenericParameters,
     IReadOnlyList<string> InheritedProtocols,
+    IReadOnlyList<TypeConstraint> WhereConstraints,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
@@ -281,10 +313,15 @@ public sealed record ProtocolDeclaration(
 /// have real bodies, though (same philosophy again) the parser doesn't
 /// enforce that; a bodyless `func` here parses too, and it's
 /// `Semantics/`'s job to reject it as invalid outside a protocol.
+/// `WhereConstraints` covers the real Swift pattern of constraining an
+/// already-generic extended type (`extension Array where Element:
+/// Equatable`) without a `GenericParameters` list of its own.
 /// </summary>
 public sealed record ExtensionDeclaration(
     string ExtendedType,
+    IReadOnlyList<TypeConstraint> GenericParameters,
     IReadOnlyList<string> ConformedProtocols,
+    IReadOnlyList<TypeConstraint> WhereConstraints,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 

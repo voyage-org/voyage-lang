@@ -699,7 +699,7 @@ Console.WriteLine("=== Function declarations ===");
     Check("no diagnostics", sink.Diagnostics.Count == 0);
     var dump = AstPrinter.Print(unit);
     Check("AST dump mentions FunctionDeclaration 'add'", dump.Contains("FunctionDeclaration 'add'"));
-    Check("AST dump mentions both Parameter nodes", dump.Contains("Parameter 'a'") && dump.Contains("Parameter 'b'"));
+    Check("AST dump mentions both Parameter nodes", dump.Contains("name='a'") && dump.Contains("name='b'"));
     Check("AST dump mentions the Int TypeNodes", dump.Contains("TypeNode 'Int'"));
     Check("AST dump mentions ReturnStatement", dump.Contains("ReturnStatement"));
 }
@@ -1010,6 +1010,145 @@ Console.WriteLine("=== protocol / extension declarations ===");
         [
             FunctionDeclaration { Name: "greet", Body: null },
             FunctionDeclaration { Name: "farewell", Body: null },
+        ]);
+}
+
+// ---------------------------------------------------------------------
+// 17. Generics: <T>, <T: Protocol>, where clauses, parameter labels
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Generics ===");
+{
+    // Swift's real identity function signature — the simplest possible
+    // generic function, no constraints.
+    var unit = ParseSource("func identity<T>(value: T) -> T {\n    value\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("bare '<T>' generic parameter parses correctly",
+        unit.Statements is
+        [
+            FunctionDeclaration
+            {
+                Name: "identity",
+                GenericParameters: [TypeConstraint { TypeName: "T", ConformedProtocols: [] }],
+                Parameters: [Parameter { Name: "value", Type: TypeNode { Name: "T" } }],
+                ReturnType: TypeNode { Name: "T" },
+            },
+        ]);
+}
+{
+    // '_ value: T' — suppressed external label, exactly as in
+    // type-system.md's own firstMatch/merge examples.
+    var unit = ParseSource("func identity<T>(_ value: T) -> T {\n    value\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'_' suppresses the external label (ExternalLabel is null)",
+        fn?.Parameters is [Parameter { ExternalLabel: null, Name: "value" }]);
+}
+{
+    // Explicit distinct external/internal labels — the general case the
+    // same lookahead logic also happens to support.
+    var unit = ParseSource("func move(to destination: Int) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("distinct external/internal labels ('to destination') parse correctly",
+        fn?.Parameters is [Parameter { ExternalLabel: "to", Name: "destination" }]);
+}
+{
+    // A plain 'name: Type' parameter still defaults ExternalLabel to the
+    // same value as Name (Swift's implicit default) — confirms the
+    // generics work didn't regress the non-generic parameter case.
+    var unit = ParseSource("func add(a: Int, b: Int) -> Int {\n    a + b\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("plain 'a: Int' still defaults ExternalLabel to 'a'",
+        fn?.Parameters is [Parameter { ExternalLabel: "a", Name: "a" }, Parameter { ExternalLabel: "b", Name: "b" }]);
+}
+{
+    // Inline constraint: <T: Equatable>
+    var unit = ParseSource("func f<T: Equatable>(a: T, b: T) -> Bool {\n    a == b\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("inline '<T: Equatable>' constraint parses correctly",
+        fn?.GenericParameters is [TypeConstraint { TypeName: "T", ConformedProtocols: ["Equatable"] }]);
+}
+{
+    // Protocol composition via '&': <T: Drawable & Equatable>
+    var unit = ParseSource("func f<T: Drawable & Equatable>(a: T) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'&'-composed inline constraint parses correctly",
+        fn?.GenericParameters is [TypeConstraint { TypeName: "T", ConformedProtocols: ["Drawable", "Equatable"] }]);
+}
+{
+    // type-system.md's own merge<T> example: a trailing where clause.
+    var unit = ParseSource("func merge<T>(a: T, b: T) -> T where T: Equatable {\n    a\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("trailing 'where T: Equatable' clause parses correctly",
+        fn?.WhereConstraints is [TypeConstraint { TypeName: "T", ConformedProtocols: ["Equatable"] }]);
+}
+{
+    // Multiple generic parameters, comma-separated.
+    var unit = ParseSource("func pair<K, V>(key: K, value: V) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("multiple comma-separated generic parameters parse correctly",
+        fn?.GenericParameters is
+        [
+            TypeConstraint { TypeName: "K", ConformedProtocols: [] },
+            TypeConstraint { TypeName: "V", ConformedProtocols: [] },
+        ]);
+}
+{
+    // type-system.md's own Stack<T>: Container example — generic type
+    // declaration with a conformance clause.
+    var unit = ParseSource("struct Stack<T>: Container {\n    var count: Int\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("generic struct with a conformance clause parses correctly",
+        unit.Statements is
+        [
+            StructDeclaration
+            {
+                Name: "Stack",
+                GenericParameters: [TypeConstraint { TypeName: "T" }],
+                ConformedProtocols: ["Container"],
+            },
+        ]);
+}
+{
+    // extension Array where Element: Equatable — a where clause with no
+    // '<...>' list of its own, constraining an already-generic type.
+    var unit = ParseSource("extension Array where Element: Equatable {\n    func f() {}\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("extension where-clause with no generic parameter list parses correctly",
+        unit.Statements is
+        [
+            ExtensionDeclaration
+            {
+                ExtendedType: "Array",
+                GenericParameters: [],
+                WhereConstraints: [TypeConstraint { TypeName: "Element", ConformedProtocols: ["Equatable"] }],
+            },
+        ]);
+}
+{
+    // Confirms generics didn't break '<'/'>' as ordinary comparison
+    // operators in expression position — no ambiguity in practice since
+    // generic parsing only triggers at declaration call sites.
+    var unit = ParseSource("if a < b && c > d { go() }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'<' and '>' still parse as comparison operators in expression position",
+        unit.Statements is
+        [
+            IfStatement
+            {
+                Condition: BinaryExpression
+                {
+                    Operator: BinaryOperator.LogicalAnd,
+                    Left: BinaryExpression { Operator: BinaryOperator.Less },
+                    Right: BinaryExpression { Operator: BinaryOperator.Greater },
+                },
+            },
         ]);
 }
 

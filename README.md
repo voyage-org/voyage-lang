@@ -144,7 +144,8 @@ why, if you're wondering.
 - [x] Parser: `struct`/`enum`/`case` declarations, full `let`/`var` type annotations (including annotation-only bindings) — 136/136 checks passing
 - [x] Parser: assignment statements (`=`, `+=`, `-=`, `*=`, `/=`) — 142/142 checks passing
 - [x] Parser: `protocol`/`extension` declarations, conformance/inheritance clauses (also retrofitted onto `struct`/`enum`) — 152/152 checks passing
-- [ ] Parser: generics (`<T>`/`where`), `switch`, `for`-`in`
+- [x] Parser: generics — `<T>`, `<T: Protocol & Protocol>`, `where` clauses, parameter labels (`_ name: Type`, `external internal: Type`) — 174/174 checks passing
+- [ ] Parser: richer type syntax (`Array<T>`, `[T]`, `(Int) -> String`, `any`/`some`), member access, `switch`, `for`-`in`
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

@@ -68,25 +68,33 @@ public static class AstPrinter
 
             case StructDeclaration structDecl:
                 Line($"StructDeclaration '{structDecl.Name}' @ {structDecl.Span}");
+                Line2($"genericParameters: {FormatGenericParameters(structDecl.GenericParameters)}", sb, indent + 1);
                 Line2($"conformedProtocols: {FormatNameList(structDecl.ConformedProtocols)}", sb, indent + 1);
+                Line2($"where: {FormatGenericParameters(structDecl.WhereConstraints)}", sb, indent + 1);
                 WriteStatementList("members", structDecl.Members, sb, indent + 1);
                 break;
 
             case EnumDeclaration enumDecl:
                 Line($"EnumDeclaration '{enumDecl.Name}' @ {enumDecl.Span}");
+                Line2($"genericParameters: {FormatGenericParameters(enumDecl.GenericParameters)}", sb, indent + 1);
                 Line2($"conformedProtocols: {FormatNameList(enumDecl.ConformedProtocols)}", sb, indent + 1);
+                Line2($"where: {FormatGenericParameters(enumDecl.WhereConstraints)}", sb, indent + 1);
                 WriteStatementList("members", enumDecl.Members, sb, indent + 1);
                 break;
 
             case ProtocolDeclaration protocolDecl:
                 Line($"ProtocolDeclaration '{protocolDecl.Name}' @ {protocolDecl.Span}");
+                Line2($"genericParameters: {FormatGenericParameters(protocolDecl.GenericParameters)}", sb, indent + 1);
                 Line2($"inheritedProtocols: {FormatNameList(protocolDecl.InheritedProtocols)}", sb, indent + 1);
+                Line2($"where: {FormatGenericParameters(protocolDecl.WhereConstraints)}", sb, indent + 1);
                 WriteStatementList("members", protocolDecl.Members, sb, indent + 1);
                 break;
 
             case ExtensionDeclaration extensionDecl:
                 Line($"ExtensionDeclaration '{extensionDecl.ExtendedType}' @ {extensionDecl.Span}");
+                Line2($"genericParameters: {FormatGenericParameters(extensionDecl.GenericParameters)}", sb, indent + 1);
                 Line2($"conformedProtocols: {FormatNameList(extensionDecl.ConformedProtocols)}", sb, indent + 1);
+                Line2($"where: {FormatGenericParameters(extensionDecl.WhereConstraints)}", sb, indent + 1);
                 WriteStatementList("members", extensionDecl.Members, sb, indent + 1);
                 break;
 
@@ -108,6 +116,7 @@ public static class AstPrinter
 
             case FunctionDeclaration fn:
                 Line($"FunctionDeclaration '{fn.Name}' @ {fn.Span}");
+                Line2($"genericParameters: {FormatGenericParameters(fn.GenericParameters)}", sb, indent + 1);
                 if (fn.Parameters.Count == 0)
                 {
                     Line2("parameters: (none)", sb, indent + 1);
@@ -128,6 +137,7 @@ public static class AstPrinter
                 {
                     Line2("returnType: (none, implicit Void)", sb, indent + 1);
                 }
+                Line2($"where: {FormatGenericParameters(fn.WhereConstraints)}", sb, indent + 1);
                 if (fn.Body is not null)
                 {
                     WriteStatementList("body", fn.Body, sb, indent + 1);
@@ -139,7 +149,7 @@ public static class AstPrinter
                 break;
 
             case Parameter p:
-                Line($"Parameter '{p.Name}' @ {p.Span}");
+                Line($"Parameter externalLabel='{p.ExternalLabel ?? "(none)"}' name='{p.Name}' @ {p.Span}");
                 Write(p.Type, sb, indent + 1);
                 break;
 
@@ -282,4 +292,21 @@ public static class AstPrinter
     /// list for a single-line dump entry, or "(none)" if empty.</summary>
     private static string FormatNameList(IReadOnlyList<string> names) =>
         names.Count == 0 ? "(none)" : string.Join(", ", names);
+
+    /// <summary>Formats a `&lt;T, U: Protocol&gt;` generic-parameter list
+    /// or `where T: Protocol` clause's constraints for a single-line
+    /// dump entry, or "(none)" if empty. Shared by both uses since
+    /// `TypeConstraint` covers both shapes — see its remarks in
+    /// Ast.cs.</summary>
+    private static string FormatGenericParameters(IReadOnlyList<TypeConstraint> constraints)
+    {
+        if (constraints.Count == 0)
+        {
+            return "(none)";
+        }
+        return string.Join(", ", constraints.Select(c =>
+            c.ConformedProtocols.Count == 0
+                ? c.TypeName
+                : $"{c.TypeName}: {string.Join(" & ", c.ConformedProtocols)}"));
+    }
 }

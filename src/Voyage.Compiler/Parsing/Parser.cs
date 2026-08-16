@@ -80,6 +80,21 @@ public sealed class Parser
 
     private bool IsAtEnd => Current.Kind == TokenKind.EndOfFile;
 
+    /// <summary>
+    /// Looks ahead without consuming. Used by <see cref="ParseParameter"/>
+    /// to distinguish `name: Type` from `externalLabel name: Type` (or
+    /// `_ name: Type`) — the only place in this parser that currently
+    /// needs more than one token of lookahead. If this stops being the
+    /// only caller, that's fine; it was deliberately removed once before
+    /// (as genuinely dead code) and re-added only once a real use
+    /// existed, rather than kept "just in case."
+    /// </summary>
+    private Token PeekAt(int offset)
+    {
+        var i = _pos + offset;
+        return i < _tokens.Count ? _tokens[i] : _tokens[^1]; // ^1 is EndOfFile
+    }
+
     private Token Advance()
     {
         var t = Current;
@@ -303,10 +318,11 @@ public sealed class Parser
     /// lowering left to a later phase per ADR-0005.
     /// </summary>
     /// <summary>
-    /// Parses `func` NAME `(` PARAM, ... `)` [`->` Type] [`{` STATEMENT*
-    /// `}`]. The body is optional — its absence (`Body == null`) means a
-    /// protocol requirement (`func draw() -> String` with nothing after
-    /// it); its presence, even as `{}`, means a real (possibly empty)
+    /// Parses `func` NAME [`&lt;` GENERICS `&gt;`] `(` PARAM, ... `)`
+    /// [`->` Type] [`where` CONSTRAINTS] [`{` STATEMENT* `}`]. The body
+    /// is optional — its absence (`Body == null`) means a protocol
+    /// requirement (`func draw() -> String` with nothing after it); its
+    /// presence, even as `{}`, means a real (possibly empty)
     /// implementation.
     /// </summary>
     private Statement ParseFunctionDeclaration()
@@ -316,6 +332,7 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected a function name after 'func'.");
         var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
 
         Expect(TokenKind.LParen, "Expected '(' to begin the parameter list.");
         var parameters = new List<Parameter>();
@@ -327,7 +344,7 @@ public sealed class Parser
                 parameters.Add(ParseParameter());
             }
         }
-        var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
+        Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
 
         TypeNode? returnType = null;
         if (Match(TokenKind.Arrow))
@@ -335,19 +352,21 @@ public sealed class Parser
             returnType = ParseType();
         }
 
+        var whereConstraints = ParseWhereClause();
+
         if (Check(TokenKind.LBrace))
         {
             Advance(); // consume '{'
             var body = ParseBlockStatements();
             var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
-            return new FunctionDeclaration(name, parameters, returnType, body, new SourceSpan(start, closeBrace.Span.End));
+            return new FunctionDeclaration(name, genericParameters, parameters, returnType, whereConstraints, body, new SourceSpan(start, closeBrace.Span.End));
         }
 
         // No '{' — this is a bodyless protocol requirement. Still needs a
         // proper statement terminator, same as any other statement.
-        var end = returnType?.Span.End ?? closeParen.Span.End;
+        var end = Current.Span.Start;
         ExpectStatementTerminator();
-        return new FunctionDeclaration(name, parameters, returnType, null, new SourceSpan(start, end));
+        return new FunctionDeclaration(name, genericParameters, parameters, returnType, whereConstraints, null, new SourceSpan(start, end));
     }
 
     /// <summary>
@@ -370,8 +389,73 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses `struct` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Members
-    /// reuse `ParseBlockStatements` directly — `var`/`let` properties and
+    /// Parses a single `TypeConstraint`: NAME [`:` PROTOCOL (`&amp;` PROTOCOL)*].
+    /// Shared shape for both an inline `&lt;T: P&gt;` generic-parameter entry
+    /// and a `where T: P` clause entry — see `TypeConstraint`'s remarks in
+    /// Ast.cs for why one node/parse method covers both.
+    /// </summary>
+    private TypeConstraint ParseTypeConstraint()
+    {
+        var start = Current.Span.Start;
+        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        var protocols = new List<string>();
+        if (Match(TokenKind.Colon))
+        {
+            protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            while (Match(TokenKind.Amp))
+            {
+                protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            }
+        }
+        var end = Current.Span.Start;
+        return new TypeConstraint(nameToken.Text, protocols, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses an optional `&lt;T, U: Protocol, ...&gt;` generic-parameter
+    /// list. Returns an empty list when no `&lt;` is present. Since `&lt;`/
+    /// `&gt;` are also the comparison operators, this only works safely
+    /// because every call site is in a declaration position (right after
+    /// a name, before `(`/`{`) rather than inside expression parsing —
+    /// there's no real ambiguity to resolve at those call sites.
+    /// </summary>
+    private List<TypeConstraint> ParseGenericParameterList()
+    {
+        var result = new List<TypeConstraint>();
+        if (Match(TokenKind.Less))
+        {
+            result.Add(ParseTypeConstraint());
+            while (Match(TokenKind.Comma))
+            {
+                result.Add(ParseTypeConstraint());
+            }
+            Expect(TokenKind.Greater, "Expected '>' to close the generic parameter list.");
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Parses an optional trailing `where T: Protocol, U: Protocol, ...`
+    /// clause. Returns an empty list when no `where` is present.
+    /// </summary>
+    private List<TypeConstraint> ParseWhereClause()
+    {
+        var result = new List<TypeConstraint>();
+        if (Match(TokenKind.KwWhere))
+        {
+            result.Add(ParseTypeConstraint());
+            while (Match(TokenKind.Comma))
+            {
+                result.Add(ParseTypeConstraint());
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Parses `struct` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Members reuse
+    /// `ParseBlockStatements` directly — `var`/`let` properties and
     /// `func` methods are both just statements already, so no new
     /// member-parsing infrastructure was needed.
     /// </summary>
@@ -382,20 +466,23 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected a struct name after 'struct'.");
         var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the struct body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the struct body.");
 
-        return new StructDeclaration(name, conformances, members, new SourceSpan(start, closeBrace.Span.End));
+        return new StructDeclaration(name, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>
-    /// Parses `enum` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Same
-    /// block-statement reuse as `ParseStructDeclaration` — see
-    /// `EnumDeclaration`'s remarks for why the parser doesn't restrict
-    /// members to only `case` declarations.
+    /// Parses `enum` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `ParseStructDeclaration` — see `EnumDeclaration`'s remarks for
+    /// why the parser doesn't restrict members to only `case`
+    /// declarations.
     /// </summary>
     private Statement ParseEnumDeclaration()
     {
@@ -404,19 +491,21 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected an enum name after 'enum'.");
         var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the enum body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the enum body.");
 
-        return new EnumDeclaration(name, conformances, members, new SourceSpan(start, closeBrace.Span.End));
+        return new EnumDeclaration(name, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>
-    /// Parses `protocol` NAME [`: ` INHERITANCE] `{` MEMBER* `}`. Same
-    /// block-statement reuse as `struct`/`enum` — see
-    /// `ProtocolDeclaration`'s remarks.
+    /// Parses `protocol` NAME [`&lt;` GENERICS `&gt;`] [`: ` INHERITANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `struct`/`enum` — see `ProtocolDeclaration`'s remarks.
     /// </summary>
     private Statement ParseProtocolDeclaration()
     {
@@ -425,19 +514,24 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected a protocol name after 'protocol'.");
         var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
         var inherited = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the protocol body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the protocol body.");
 
-        return new ProtocolDeclaration(name, inherited, members, new SourceSpan(start, closeBrace.Span.End));
+        return new ProtocolDeclaration(name, genericParameters, inherited, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>
-    /// Parses `extension` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Same
-    /// block-statement reuse as `struct`/`enum`/`protocol` — see
-    /// `ExtensionDeclaration`'s remarks.
+    /// Parses `extension` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `struct`/`enum`/`protocol` — see `ExtensionDeclaration`'s
+    /// remarks, including the real Swift pattern of a `where` clause with
+    /// no `&lt;...&gt;` list (`extension Array where Element: Equatable`,
+    /// constraining an already-generic extended type).
     /// </summary>
     private Statement ParseExtensionDeclaration()
     {
@@ -446,13 +540,15 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected a type name after 'extension'.");
         var extendedType = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the extension body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the extension body.");
 
-        return new ExtensionDeclaration(extendedType, conformances, members, new SourceSpan(start, closeBrace.Span.End));
+        return new ExtensionDeclaration(extendedType, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>
@@ -492,16 +588,41 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses a single "NAME: Type" parameter. Swift-style external
-    /// labels (a separate external name, or `_` to suppress it) are not
-    /// yet recognized — see Parameter's remarks.
+    /// Parses a single parameter, in any of three shapes: `name: Type`
+    /// (external label defaults to the same as the internal name, per
+    /// Swift's implicit-same-label default — applied here so downstream
+    /// phases never re-derive it), `_ name: Type` (external label
+    /// suppressed — `ExternalLabel` is null), or `external name: Type`
+    /// (an explicit, distinct external label). Disambiguated via one
+    /// token of lookahead: if the token after the first identifier is
+    /// itself an identifier (rather than `:`), the first identifier was
+    /// a label, not the parameter's name.
     /// </summary>
     private Parameter ParseParameter()
     {
-        var nameToken = Expect(TokenKind.Identifier, "Expected a parameter name.");
+        var start = Current.Span.Start;
+        string? externalLabel;
+        string name;
+
+        if (Check(TokenKind.Identifier) && PeekAt(1).Kind == TokenKind.Identifier)
+        {
+            // Two identifiers in a row: the first is an external label
+            // (either a real label, or '_' to suppress one) and the
+            // second is the internal name.
+            var labelToken = Advance();
+            externalLabel = labelToken.Text == "_" ? null : labelToken.Text;
+            name = Advance().Text;
+        }
+        else
+        {
+            var nameToken = Expect(TokenKind.Identifier, "Expected a parameter name.");
+            name = nameToken.Text;
+            externalLabel = name; // Swift's implicit default: same as internal name
+        }
+
         Expect(TokenKind.Colon, "Expected ':' after parameter name.");
         var type = ParseType();
-        return new Parameter(nameToken.Text, type, new SourceSpan(nameToken.Span.Start, type.Span.End));
+        return new Parameter(externalLabel, name, type, new SourceSpan(start, type.Span.End));
     }
 
     /// <summary>
