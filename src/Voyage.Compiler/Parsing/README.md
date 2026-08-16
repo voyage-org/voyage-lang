@@ -32,9 +32,11 @@ Implemented:
   literals, parenthesized expressions
 - `func` declarations: `func name(a: Int, b: Int) -> Int { ... }` —
   params, an optional `-> Type` return type (omitted means implicit
-  Void), and a `{ ... }` body of ordinary statements (so `return`,
-  nested `func`s, `let`/`var`, etc. all just work inside a body with no
-  special-casing)
+  Void), and a body of ordinary statements. The body itself is
+  **optional**: `func draw() -> String` with nothing after it is a
+  *protocol requirement* (`FunctionDeclaration.Body == null`), distinct
+  from an empty implementation (`func draw() -> String {}`, a real,
+  present, zero-statement body).
 - `return` statements, with or without a value
 - Minimal type references for param/return/annotation types: a bare
   identifier with an optional trailing `?` (`Int`, `String?`) — see below
@@ -47,11 +49,21 @@ Implemented:
 - `while` loops
 - Bare `break`/`continue` (no loop labels — voyage-lang doesn't have
   loop labels yet)
-- `struct`/`enum` declarations — bodies reuse the exact same
-  block-statement machinery as function bodies, so `var`/`let`
-  properties and `func` methods parse inside them automatically with no
-  new member-parsing infrastructure. Protocol conformance clauses
-  (`struct Point: Drawable`) aren't parsed yet.
+- `struct`/`enum`/`protocol`/`extension` declarations, all sharing the
+  same infrastructure:
+  - Bodies reuse the exact same block-statement machinery as function
+    bodies, so `var`/`let` properties and `func` methods parse inside
+    them automatically with no new member-parsing infrastructure.
+  - An optional `: A, B` conformance/inheritance clause after the name
+    (`struct Point: Drawable, Equatable`, `protocol P2: P1`,
+    `extension Point: Drawable`), via a single shared
+    `ParseConformanceClause` helper.
+  - The parser stays permissive about *shape* across all four — e.g. a
+    `func` with a real body parses fine inside a `protocol`, and a
+    bodyless `func` requirement parses fine inside an `extension`, even
+    though neither is semantically sensible. Whether a given member
+    belongs in a given declaration kind is a `Semantics/` question, not
+    a `Parsing/` one.
 - `case` declarations inside `enum` bodies, with or without associated
   values (`case circle(radius: Double)`, `case triangle`) — the
   associated-value list reuses the same `Parameter` parsing as function
@@ -63,7 +75,7 @@ Implemented:
   once member access/subscripting exist — no change needed here when
   that happens. Whether a given `Target` is actually assignable (an
   lvalue) is a `Semantics/` question; `Parsing/` stays permissive about
-  shape, same philosophy as `struct`/`enum` member parsing above.
+  shape, same philosophy as everywhere else in this list.
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -72,7 +84,8 @@ supported and unsupported constructs still parses as far as it can:
 - Generic function parameters and `where` clauses (`func identity<T>(_
   value: T) -> T`) — nor the Swift-style external parameter labels
   (`_ value: T`) that generic examples in `grammar.md` use; parameters
-  are currently just `name: Type`
+  are currently just `name: Type`. This also means generic *type*
+  declarations (`struct Stack<T>`) aren't parsed either.
 - Richer type syntax: generic type arguments (`Array<T>`), array sugar
   (`[T]`), function types (`(Int) -> String`), and keyword-spelled type
   forms (`Self`, `any P`, `some P`) — only bare-identifier types (plus
@@ -80,7 +93,7 @@ supported and unsupported constructs still parses as far as it can:
 - `if let`/`if case` conditional binding forms — only a plain
   boolean-valued condition expression is recognized
 - `switch`, `for`-`in`, `guard`, `repeat`-`while`
-- `protocol`, `extension`, `actor`
+- `actor`
 - String interpolation (`"\(...)"`)
 - Member access (`.`), subscripting, ternary, `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
@@ -98,27 +111,28 @@ set up to extend this way as later grammar constructs are added.
 ## Known limitations
 
 **Malformed declarations (and any input hitting an entirely
-unrecognized token, like a bare assignment) can produce multiple
-redundant diagnostics for a single error.** Every `Expect()` call that
-fails reports a diagnostic without consuming the unexpected token (by
-design — it lets the *next* caller decide how to recover), but when
-several `Expect()`/parse calls chain together, each one can hit the same
-still-unconsumed token and report its own "expected X" error. Confirmed
-this never causes an infinite loop — `ParsePrimary`'s default case
-always advances past an unrecognized token as the ultimate
-forward-progress guarantee — so this is a diagnostic-*quality* issue
-(noisy output for bad input), not a correctness or safety one. Worth
-addressing once error-recovery UX becomes a priority; not blocking for
-now since every currently-supported construct's happy path is unaffected
-and covered by tests.
+unrecognized token) can produce multiple redundant diagnostics for a
+single error.** Every `Expect()` call that fails reports a diagnostic
+without consuming the unexpected token (by design — it lets the *next*
+caller decide how to recover), but when several `Expect()`/parse calls
+chain together, each one can hit the same still-unconsumed token and
+report its own "expected X" error. Confirmed this never causes an
+infinite loop — `ParsePrimary`'s default case always advances past an
+unrecognized token as the ultimate forward-progress guarantee — so this
+is a diagnostic-*quality* issue (noisy output for bad input), not a
+correctness or safety one. Worth addressing once error-recovery UX
+becomes a priority; not blocking for now since every currently-supported
+construct's happy path is unaffected and covered by tests.
 
 ## Next milestone
 
-`protocol`/`extension` → generics (`<T>`/`where`, unblocking the
-external-parameter-label form of `func` params too) → `switch` (a real
-design question, since meaningful pattern matching needs `enum` cases to
-match against, which now exist) → `for`-`in` (needs the range operators
-already lexed but not yet wired into any grammar construct) → error
-handling (`throws`) → concurrency (`actor`/`task{}`, saved for last as
-the most complex slice). No fixed order is binding — pick whichever
+Generics (`<T>`/`where`) — unblocks both generic function parameters and
+generic type declarations (`struct Stack<T>`), plus the external-
+parameter-label form of `func` params (`func identity<T>(_ value: T) ->
+T`) that `grammar.md`'s own generic examples use. After that: `switch` (a
+real design question, since meaningful pattern matching needs `enum`
+cases to match against, which now exist) → `for`-`in` (needs the range
+operators already lexed but not yet wired into any grammar construct) →
+error handling (`throws`) → concurrency (`actor`/`task{}`, saved for last
+as the most complex slice). No fixed order is binding — pick whichever
 construct unblocks the most useful next test case.

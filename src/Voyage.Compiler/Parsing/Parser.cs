@@ -49,7 +49,7 @@ public sealed class Parser
     // a much more useful message than a generic parse error.
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
-        TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
+        TokenKind.KwActor,
         TokenKind.KwGuard, TokenKind.KwSwitch,
         TokenKind.KwFor, TokenKind.KwRepeat,
         TokenKind.KwThrow, TokenKind.KwDo, TokenKind.KwImport,
@@ -176,6 +176,16 @@ public sealed class Parser
             return ParseCaseDeclaration();
         }
 
+        if (Check(TokenKind.KwProtocol))
+        {
+            return ParseProtocolDeclaration();
+        }
+
+        if (Check(TokenKind.KwExtension))
+        {
+            return ParseExtensionDeclaration();
+        }
+
         if (Check(TokenKind.KwReturn))
         {
             return ParseReturnStatement();
@@ -292,6 +302,13 @@ public sealed class Parser
     /// just parsed as one ExpressionStatement, with implicit-return
     /// lowering left to a later phase per ADR-0005.
     /// </summary>
+    /// <summary>
+    /// Parses `func` NAME `(` PARAM, ... `)` [`->` Type] [`{` STATEMENT*
+    /// `}`]. The body is optional — its absence (`Body == null`) means a
+    /// protocol requirement (`func draw() -> String` with nothing after
+    /// it); its presence, even as `{}`, means a real (possibly empty)
+    /// implementation.
+    /// </summary>
     private Statement ParseFunctionDeclaration()
     {
         var start = Current.Span.Start;
@@ -310,7 +327,7 @@ public sealed class Parser
                 parameters.Add(ParseParameter());
             }
         }
-        Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
+        var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
 
         TypeNode? returnType = null;
         if (Match(TokenKind.Arrow))
@@ -318,19 +335,45 @@ public sealed class Parser
             returnType = ParseType();
         }
 
-        Expect(TokenKind.LBrace, "Expected '{' to begin the function body.");
-        var body = ParseBlockStatements();
-        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
+        if (Check(TokenKind.LBrace))
+        {
+            Advance(); // consume '{'
+            var body = ParseBlockStatements();
+            var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
+            return new FunctionDeclaration(name, parameters, returnType, body, new SourceSpan(start, closeBrace.Span.End));
+        }
 
-        return new FunctionDeclaration(name, parameters, returnType, body, new SourceSpan(start, closeBrace.Span.End));
+        // No '{' — this is a bodyless protocol requirement. Still needs a
+        // proper statement terminator, same as any other statement.
+        var end = returnType?.Span.End ?? closeParen.Span.End;
+        ExpectStatementTerminator();
+        return new FunctionDeclaration(name, parameters, returnType, null, new SourceSpan(start, end));
     }
 
     /// <summary>
-    /// Parses `struct` NAME `{` MEMBER* `}`. Members reuse
-    /// `ParseBlockStatements` directly — `var`/`let` properties and
+    /// Parses an optional `: A, B, ...` conformance/inheritance clause,
+    /// shared by `struct`/`enum`/`protocol`/`extension`. Returns an empty
+    /// list when no `:` is present.
+    /// </summary>
+    private List<string> ParseConformanceClause()
+    {
+        var names = new List<string>();
+        if (Match(TokenKind.Colon))
+        {
+            names.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            while (Match(TokenKind.Comma))
+            {
+                names.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            }
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Parses `struct` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Members
+    /// reuse `ParseBlockStatements` directly — `var`/`let` properties and
     /// `func` methods are both just statements already, so no new
-    /// member-parsing infrastructure was needed. Protocol conformance
-    /// clauses (`struct Point: Drawable`) are not yet parsed.
+    /// member-parsing infrastructure was needed.
     /// </summary>
     private Statement ParseStructDeclaration()
     {
@@ -339,18 +382,20 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected a struct name after 'struct'.");
         var name = nameToken.Text;
+        var conformances = ParseConformanceClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the struct body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the struct body.");
 
-        return new StructDeclaration(name, members, new SourceSpan(start, closeBrace.Span.End));
+        return new StructDeclaration(name, conformances, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>
-    /// Parses `enum` NAME `{` MEMBER* `}`. Same block-statement reuse as
-    /// `ParseStructDeclaration` — see `EnumDeclaration`'s remarks for why
-    /// the parser doesn't restrict members to only `case` declarations.
+    /// Parses `enum` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Same
+    /// block-statement reuse as `ParseStructDeclaration` — see
+    /// `EnumDeclaration`'s remarks for why the parser doesn't restrict
+    /// members to only `case` declarations.
     /// </summary>
     private Statement ParseEnumDeclaration()
     {
@@ -359,12 +404,55 @@ public sealed class Parser
 
         var nameToken = Expect(TokenKind.Identifier, "Expected an enum name after 'enum'.");
         var name = nameToken.Text;
+        var conformances = ParseConformanceClause();
 
         Expect(TokenKind.LBrace, "Expected '{' to begin the enum body.");
         var members = ParseBlockStatements();
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the enum body.");
 
-        return new EnumDeclaration(name, members, new SourceSpan(start, closeBrace.Span.End));
+        return new EnumDeclaration(name, conformances, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `protocol` NAME [`: ` INHERITANCE] `{` MEMBER* `}`. Same
+    /// block-statement reuse as `struct`/`enum` — see
+    /// `ProtocolDeclaration`'s remarks.
+    /// </summary>
+    private Statement ParseProtocolDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'protocol'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a protocol name after 'protocol'.");
+        var name = nameToken.Text;
+        var inherited = ParseConformanceClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the protocol body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the protocol body.");
+
+        return new ProtocolDeclaration(name, inherited, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `extension` NAME [`: ` CONFORMANCE] `{` MEMBER* `}`. Same
+    /// block-statement reuse as `struct`/`enum`/`protocol` — see
+    /// `ExtensionDeclaration`'s remarks.
+    /// </summary>
+    private Statement ParseExtensionDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'extension'
+
+        var nameToken = Expect(TokenKind.Identifier, "Expected a type name after 'extension'.");
+        var extendedType = nameToken.Text;
+        var conformances = ParseConformanceClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the extension body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the extension body.");
+
+        return new ExtensionDeclaration(extendedType, conformances, members, new SourceSpan(start, closeBrace.Span.End));
     }
 
     /// <summary>

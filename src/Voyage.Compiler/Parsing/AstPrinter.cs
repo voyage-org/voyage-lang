@@ -68,12 +68,26 @@ public static class AstPrinter
 
             case StructDeclaration structDecl:
                 Line($"StructDeclaration '{structDecl.Name}' @ {structDecl.Span}");
+                Line2($"conformedProtocols: {FormatNameList(structDecl.ConformedProtocols)}", sb, indent + 1);
                 WriteStatementList("members", structDecl.Members, sb, indent + 1);
                 break;
 
             case EnumDeclaration enumDecl:
                 Line($"EnumDeclaration '{enumDecl.Name}' @ {enumDecl.Span}");
+                Line2($"conformedProtocols: {FormatNameList(enumDecl.ConformedProtocols)}", sb, indent + 1);
                 WriteStatementList("members", enumDecl.Members, sb, indent + 1);
+                break;
+
+            case ProtocolDeclaration protocolDecl:
+                Line($"ProtocolDeclaration '{protocolDecl.Name}' @ {protocolDecl.Span}");
+                Line2($"inheritedProtocols: {FormatNameList(protocolDecl.InheritedProtocols)}", sb, indent + 1);
+                WriteStatementList("members", protocolDecl.Members, sb, indent + 1);
+                break;
+
+            case ExtensionDeclaration extensionDecl:
+                Line($"ExtensionDeclaration '{extensionDecl.ExtendedType}' @ {extensionDecl.Span}");
+                Line2($"conformedProtocols: {FormatNameList(extensionDecl.ConformedProtocols)}", sb, indent + 1);
+                WriteStatementList("members", extensionDecl.Members, sb, indent + 1);
                 break;
 
             case CaseDeclaration caseDecl:
@@ -114,7 +128,14 @@ public static class AstPrinter
                 {
                     Line2("returnType: (none, implicit Void)", sb, indent + 1);
                 }
-                WriteStatementList("body", fn.Body, sb, indent + 1);
+                if (fn.Body is not null)
+                {
+                    WriteStatementList("body", fn.Body, sb, indent + 1);
+                }
+                else
+                {
+                    Line2("body: (none — protocol requirement)", sb, indent + 1);
+                }
                 break;
 
             case Parameter p:
@@ -256,4 +277,9 @@ public static class AstPrinter
 
     private static void Line2(string text, StringBuilder sb, int indent) =>
         sb.Append(' ', indent * 2).Append(text).Append('\n');
+
+    /// <summary>Formats a `: A, B` conformance/inheritance clause's name
+    /// list for a single-line dump entry, or "(none)" if empty.</summary>
+    private static string FormatNameList(IReadOnlyList<string> names) =>
+        names.Count == 0 ? "(none)" : string.Join(", ", names);
 }

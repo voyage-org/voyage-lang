@@ -345,14 +345,14 @@ CompilationUnit ParseSource(string source, out InMemoryDiagnosticSink sink)
 Console.WriteLine();
 Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully ===");
 {
-    // `protocol` is real, valid voyage-lang (grammar.md Section 5) but
-    // this milestone's parser doesn't implement it yet (`struct`/`enum`
-    // are now supported — see the sections below — but `protocol` and
-    // `extension` aren't). It should report a diagnostic and produce an
-    // UnsupportedStatement rather than crashing or silently losing the
-    // rest of the file.
-    var unit = ParseSource("protocol Drawable {}\nprint(\"after\")", out var sink);
-    Check("exactly one diagnostic reported (the 'protocol' warning)",
+    // `actor` is real, valid voyage-lang (ADR-0002/ADR-0006) but this
+    // milestone's parser doesn't implement it yet (`struct`/`enum`/
+    // `protocol`/`extension` are now all supported — see the sections
+    // below — but `actor` isn't). It should report a diagnostic and
+    // produce an UnsupportedStatement rather than crashing or silently
+    // losing the rest of the file.
+    var unit = ParseSource("actor Counter {}\nprint(\"after\")", out var sink);
+    Check("exactly one diagnostic reported (the 'actor' warning)",
         sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
     Check("two statements produced despite the unsupported first one",
         unit.Statements.Count == 2, $"got {unit.Statements.Count}");
@@ -883,10 +883,11 @@ Console.WriteLine("=== struct / enum / case declarations ===");
         unit.Statements is [StructDeclaration { Name: "Empty", Members: [] }]);
 }
 {
-    // Confirms struct/enum didn't accidentally widen the unsupported set:
-    // protocol/extension/switch/for/guard should all still be rejected.
-    var unit = ParseSource("protocol P {}\nextension P {}\nprint(\"after\")", out var sink);
-    Check("both 'protocol' and 'extension' report exactly one diagnostic each",
+    // Confirms struct/enum/protocol/extension didn't accidentally widen
+    // the unsupported set further: switch/for/guard/actor should all
+    // still be rejected.
+    var unit = ParseSource("switch x {}\nfor y in z {}\nprint(\"after\")", out var sink);
+    Check("both 'switch' and 'for' report exactly one diagnostic each",
         sink.Diagnostics.Count == 2, string.Join("; ", sink.Diagnostics));
     Check("parser still recovers to the trailing print statement",
         unit.Statements is
@@ -931,8 +932,7 @@ Console.WriteLine("=== struct / enum / case declarations ===");
     }
 }
 {
-    // The struct-method mutation case that originally surfaced this gap
-    // now genuinely works, not just a workaround.
+    // A mutating assignment inside a struct method now genuinely works.
     var unit = ParseSource("struct Point {\n    var x: Double\n    func reset() {\n        x = 0\n    }\n}", out var sink);
     Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
     var structDecl = unit.Statements[0] as StructDeclaration;
@@ -941,6 +941,75 @@ Console.WriteLine("=== struct / enum / case declarations ===");
         [
             BindingStatement { Name: "x" },
             FunctionDeclaration { Name: "reset", Body: [AssignmentStatement { Target: IdentifierExpression { Name: "x" }, Value: IntegerLiteralExpression { Value: 0 } }] },
+        ]);
+}
+
+// ---------------------------------------------------------------------
+// 16. protocol / extension declarations
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== protocol / extension declarations ===");
+{
+    // grammar.md Section 5's own protocol example: a bodyless func
+    // requirement — proves FunctionDeclaration.Body is genuinely null
+    // (not an empty list) for a requirement with no implementation.
+    var unit = ParseSource("protocol Drawable {\n    func draw() -> String\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("protocol with a bodyless requirement parses, Body is genuinely null",
+        unit.Statements is
+        [
+            ProtocolDeclaration
+            {
+                Name: "Drawable",
+                InheritedProtocols: [],
+                Members: [FunctionDeclaration { Name: "draw", ReturnType: TypeNode { Name: "String" }, Body: null }],
+            },
+        ]);
+}
+{
+    // grammar.md Section 5's own extension example: conformance clause +
+    // a real single-expression-body implementation (via implicit
+    // return, ADR-0005).
+    var unit = ParseSource("extension Point: Drawable {\n    func draw() -> String {\n        \"a point\"\n    }\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("extension with conformance clause and a real implementation parses correctly",
+        unit.Statements is
+        [
+            ExtensionDeclaration
+            {
+                ExtendedType: "Point",
+                ConformedProtocols: ["Drawable"],
+                Members: [FunctionDeclaration { Name: "draw", Body: [ExpressionStatement { Expression: StringLiteralExpression { Value: "a point" } }] }],
+            },
+        ]);
+}
+{
+    // Multiple comma-separated conformances, and confirms struct/enum's
+    // previously-unparsed conformance clause now works too (bonus fix
+    // that fell out of building the shared ParseConformanceClause).
+    var unit = ParseSource("struct Point: Drawable, Equatable {\n    var x: Double\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("struct with a multi-protocol conformance clause parses correctly",
+        unit.Statements is [StructDeclaration { Name: "Point", ConformedProtocols: ["Drawable", "Equatable"] }]);
+}
+{
+    var unit = ParseSource("protocol P2: P1 {\n    func f()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("protocol inheritance clause ('protocol P2: P1') parses correctly",
+        unit.Statements is [ProtocolDeclaration { Name: "P2", InheritedProtocols: ["P1"] }]);
+}
+{
+    // A protocol requirement with parameters and no explicit newline
+    // before the next member — confirms ExpectStatementTerminator's
+    // handling of a bodyless func ending at a newline (not a '}').
+    var unit = ParseSource("protocol Greeter {\n    func greet(name: String) -> String\n    func farewell(name: String) -> String\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var protocolDecl = unit.Statements[0] as ProtocolDeclaration;
+    Check("two consecutive bodyless requirements both parse correctly",
+        protocolDecl?.Members is
+        [
+            FunctionDeclaration { Name: "greet", Body: null },
+            FunctionDeclaration { Name: "farewell", Body: null },
         ]);
 }
 

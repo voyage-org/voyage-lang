@@ -194,25 +194,32 @@ public sealed record BindingStatement(
 /// does not special-case it; turning that last expression into a
 /// return is Lowering's job, per ADR-0005. Generic parameters
 /// (`&lt;T&gt;`/`where`) are not yet parsed — see Parsing/README.md.
+///
+/// `Body` is null when no `{ ... }` was written at all — a *protocol
+/// requirement* (`func draw() -&gt; String` with nothing after it), as
+/// opposed to an empty implementation (`func draw() -&gt; String {}`,
+/// which is a real, present, zero-statement `Body`). This distinction
+/// matters: only the null case means "no implementation exists here."
 /// </summary>
 public sealed record FunctionDeclaration(
     string Name,
     IReadOnlyList<Parameter> Parameters,
     TypeNode? ReturnType,
-    IReadOnlyList<Statement> Body,
+    IReadOnlyList<Statement>? Body,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
-/// A `struct` declaration, e.g. `struct Point { var x: Double; var y:
-/// Double }`. `Members` reuses the same block-statement parsing as
+/// A `struct` declaration, e.g. `struct Point: Drawable { var x: Double;
+/// var y: Double }`. `Members` reuses the same block-statement parsing as
 /// function bodies — `var`/`let` properties and `func` methods are both
 /// just statements per <see cref="ParseBlockStatements"/>'s existing
 /// dispatch, so no new member-parsing infrastructure was needed here.
-/// `Protocol` conformance clauses (`struct Point: Drawable { ... }`) are
-/// not yet parsed — see Parsing/README.md.
+/// `ConformedProtocols` is the comma-separated `: A, B` clause after the
+/// name, empty if none was written.
 /// </summary>
 public sealed record StructDeclaration(
     string Name,
+    IReadOnlyList<string> ConformedProtocols,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
@@ -225,10 +232,12 @@ public sealed record StructDeclaration(
 /// `ParseBlockStatements`. Whether that's actually valid voyage-lang is
 /// a `Semantics/` question, not a `Parsing/` one — this parser stays
 /// permissive about *shape* and leaves *validity* to the phase whose job
-/// that is.
+/// that is. `ConformedProtocols` is the same `: A, B` clause as
+/// <see cref="StructDeclaration"/>.
 /// </summary>
 public sealed record EnumDeclaration(
     string Name,
+    IReadOnlyList<string> ConformedProtocols,
     IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
@@ -245,6 +254,38 @@ public sealed record EnumDeclaration(
 public sealed record CaseDeclaration(
     string Name,
     IReadOnlyList<Parameter> AssociatedValues,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// A `protocol` declaration, e.g. `protocol Drawable { func draw() ->
+/// String }`. Members reuse the same block-statement machinery as
+/// `struct`/`enum`; a requirement (a bodyless `func`, `FunctionDeclaration.Body
+/// == null`) is the expected shape, but the parser doesn't reject a
+/// `func` with a real body appearing here either — same permissive-about-
+/// shape philosophy as everywhere else in this file. Inherited-protocol
+/// clauses (`protocol P2: P1 { ... }`) reuse the same conformance-clause
+/// parsing as `struct`/`enum`/`extension`.
+/// </summary>
+public sealed record ProtocolDeclaration(
+    string Name,
+    IReadOnlyList<string> InheritedProtocols,
+    IReadOnlyList<Statement> Members,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
+/// An `extension` declaration, e.g. `extension Point: Drawable { func
+/// draw() -> String { ... } }`. `ExtendedType` is the type being
+/// extended; `ConformedProtocols` is the same `: A, B` clause shape as
+/// `struct`/`enum`. Members reuse the same block-statement machinery —
+/// unlike a `protocol`'s requirements, extension methods are expected to
+/// have real bodies, though (same philosophy again) the parser doesn't
+/// enforce that; a bodyless `func` here parses too, and it's
+/// `Semantics/`'s job to reject it as invalid outside a protocol.
+/// </summary>
+public sealed record ExtensionDeclaration(
+    string ExtendedType,
+    IReadOnlyList<string> ConformedProtocols,
+    IReadOnlyList<Statement> Members,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
