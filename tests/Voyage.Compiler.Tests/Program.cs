@@ -409,7 +409,7 @@ Console.WriteLine("=== Binding statements ===");
             {
                 IsMutable: false,
                 Name: "z",
-                DeclaredType: TypeNode { Name: "Int", IsOptional: false },
+                DeclaredType: NamedTypeNode { Name: "Int", IsOptional: false },
                 Initializer: IntegerLiteralExpression { Value: 30 },
             },
         ]);
@@ -426,7 +426,7 @@ Console.WriteLine("=== Binding statements ===");
             {
                 IsMutable: true,
                 Name: "x",
-                DeclaredType: TypeNode { Name: "Double", IsOptional: false },
+                DeclaredType: NamedTypeNode { Name: "Double", IsOptional: false },
                 Initializer: null,
             },
         ]);
@@ -436,7 +436,7 @@ Console.WriteLine("=== Binding statements ===");
     var unit = ParseSource("var name: String?", out var sink);
     Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
     Check("optional type annotation ('?') parses correctly",
-        unit.Statements is [BindingStatement { DeclaredType: TypeNode { Name: "String", IsOptional: true } }]);
+        unit.Statements is [BindingStatement { DeclaredType: NamedTypeNode { Name: "String", IsOptional: true } }]);
 }
 {
     // No initializer at all isn't supported yet — should degrade
@@ -609,10 +609,10 @@ Console.WriteLine("=== Function declarations ===");
                 Name: "add",
                 Parameters:
                 [
-                    Parameter { Name: "a", Type: TypeNode { Name: "Int", IsOptional: false } },
-                    Parameter { Name: "b", Type: TypeNode { Name: "Int", IsOptional: false } },
+                    Parameter { Name: "a", Type: NamedTypeNode { Name: "Int", IsOptional: false } },
+                    Parameter { Name: "b", Type: NamedTypeNode { Name: "Int", IsOptional: false } },
                 ],
-                ReturnType: TypeNode { Name: "Int", IsOptional: false },
+                ReturnType: NamedTypeNode { Name: "Int", IsOptional: false },
                 Body:
                 [
                     ReturnStatement
@@ -644,8 +644,8 @@ Console.WriteLine("=== Function declarations ===");
             FunctionDeclaration
             {
                 Name: "greet",
-                Parameters: [Parameter { Name: "name", Type: TypeNode { Name: "String", IsOptional: false } }],
-                ReturnType: TypeNode { Name: "String", IsOptional: true },
+                Parameters: [Parameter { Name: "name", Type: NamedTypeNode { Name: "String", IsOptional: false } }],
+                ReturnType: NamedTypeNode { Name: "String", IsOptional: true },
                 Body: [ExpressionStatement],
             },
         ]);
@@ -688,7 +688,7 @@ Console.WriteLine("=== Function declarations ===");
             FunctionDeclaration
             {
                 Name: "outer",
-                Body: [FunctionDeclaration { Name: "inner", ReturnType: TypeNode { Name: "Int" } }],
+                Body: [FunctionDeclaration { Name: "inner", ReturnType: NamedTypeNode { Name: "Int" } }],
             },
         ]);
 }
@@ -824,8 +824,8 @@ Console.WriteLine("=== struct / enum / case declarations ===");
                 Name: "Point",
                 Members:
                 [
-                    BindingStatement { IsMutable: true, Name: "x", DeclaredType: TypeNode { Name: "Double" }, Initializer: null },
-                    BindingStatement { IsMutable: true, Name: "y", DeclaredType: TypeNode { Name: "Double" }, Initializer: null },
+                    BindingStatement { IsMutable: true, Name: "x", DeclaredType: NamedTypeNode { Name: "Double" }, Initializer: null },
+                    BindingStatement { IsMutable: true, Name: "y", DeclaredType: NamedTypeNode { Name: "Double" }, Initializer: null },
                 ],
             },
         ]);
@@ -862,15 +862,15 @@ Console.WriteLine("=== struct / enum / case declarations ===");
             CaseDeclaration
             {
                 Name: "circle",
-                AssociatedValues: [Parameter { Name: "radius", Type: TypeNode { Name: "Double" } }],
+                AssociatedValues: [Parameter { Name: "radius", Type: NamedTypeNode { Name: "Double" } }],
             },
             CaseDeclaration
             {
                 Name: "rectangle",
                 AssociatedValues:
                 [
-                    Parameter { Name: "width", Type: TypeNode { Name: "Double" } },
-                    Parameter { Name: "height", Type: TypeNode { Name: "Double" } },
+                    Parameter { Name: "width", Type: NamedTypeNode { Name: "Double" } },
+                    Parameter { Name: "height", Type: NamedTypeNode { Name: "Double" } },
                 ],
             },
             CaseDeclaration { Name: "triangle", AssociatedValues: [] },
@@ -962,7 +962,7 @@ Console.WriteLine("=== protocol / extension declarations ===");
             {
                 Name: "Drawable",
                 InheritedProtocols: [],
-                Members: [FunctionDeclaration { Name: "draw", ReturnType: TypeNode { Name: "String" }, Body: null }],
+                Members: [FunctionDeclaration { Name: "draw", ReturnType: NamedTypeNode { Name: "String" }, Body: null }],
             },
         ]);
 }
@@ -1030,8 +1030,8 @@ Console.WriteLine("=== Generics ===");
             {
                 Name: "identity",
                 GenericParameters: [TypeConstraint { TypeName: "T", ConformedProtocols: [] }],
-                Parameters: [Parameter { Name: "value", Type: TypeNode { Name: "T" } }],
-                ReturnType: TypeNode { Name: "T" },
+                Parameters: [Parameter { Name: "value", Type: NamedTypeNode { Name: "T" } }],
+                ReturnType: NamedTypeNode { Name: "T" },
             },
         ]);
 }
@@ -1285,6 +1285,147 @@ Console.WriteLine("=== Member access, subscripting, self ===");
             Left: BinaryExpression { Left: MemberAccessExpression { MemberName: "x" } },
             Right: BinaryExpression { Left: MemberAccessExpression { MemberName: "y" } },
         });
+}
+
+// ---------------------------------------------------------------------
+// 19. Richer type syntax: array sugar, function types, any/some, Self,
+//     generic type arguments at use sites
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Richer type syntax ===");
+{
+    var unit = ParseSource("func f(items: [Int]) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("array sugar '[Int]' parses as ArrayTypeNode",
+        fn?.Parameters is [Parameter { Type: ArrayTypeNode { ElementType: NamedTypeNode { Name: "Int" } } }]);
+}
+{
+    var unit = ParseSource("func f(items: [Int]?) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("optional array sugar '[Int]?' parses correctly (IsOptional on the ArrayTypeNode itself)",
+        fn?.Parameters is [Parameter { Type: ArrayTypeNode { ElementType: NamedTypeNode { Name: "Int" }, IsOptional: true } }]);
+}
+{
+    var unit = ParseSource("func f(predicate: (Int) -> Bool) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("function type '(Int) -> Bool' parses as FunctionTypeNode",
+        fn?.Parameters is
+        [
+            Parameter
+            {
+                Type: FunctionTypeNode
+                {
+                    ParameterTypes: [NamedTypeNode { Name: "Int" }],
+                    ReturnType: NamedTypeNode { Name: "Bool" },
+                },
+            },
+        ]);
+}
+{
+    // Zero-parameter function type — a real, valid Swift-style form.
+    var unit = ParseSource("func f(action: () -> Void) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("zero-parameter function type '() -> Void' parses correctly",
+        fn?.Parameters is [Parameter { Type: FunctionTypeNode { ParameterTypes: [], ReturnType: NamedTypeNode { Name: "Void" } } }]);
+}
+{
+    // type-system.md's own firstMatch<T> example, now fully parseable
+    // end-to-end for the first time — both the [T] array sugar and the
+    // (T) -> Bool function type were the exact gap flagged when generics
+    // first landed.
+    var unit = ParseSource(
+        "func firstMatch<T>(_ items: [T], predicate: (T) -> Bool) -> T? where T: Equatable {\n" +
+        "    items[0]\n" +
+        "}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("type-system.md's firstMatch<T> example now fully parses end-to-end",
+        fn is
+        {
+            Name: "firstMatch",
+            GenericParameters: [TypeConstraint { TypeName: "T" }],
+            Parameters:
+            [
+                Parameter { ExternalLabel: null, Name: "items", Type: ArrayTypeNode { ElementType: NamedTypeNode { Name: "T" } } },
+                Parameter { Name: "predicate", Type: FunctionTypeNode { ParameterTypes: [NamedTypeNode { Name: "T" }], ReturnType: NamedTypeNode { Name: "Bool" } } },
+            ],
+            ReturnType: NamedTypeNode { Name: "T", IsOptional: true },
+            WhereConstraints: [TypeConstraint { TypeName: "T", ConformedProtocols: ["Equatable"] }],
+        });
+}
+{
+    // Generic type arguments at a use site: Stack<Int>.
+    var unit = ParseSource("func f(s: Stack<Int>) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'Stack<Int>' generic type argument at a use site parses correctly",
+        fn?.Parameters is [Parameter { Type: NamedTypeNode { Name: "Stack", GenericArguments: [NamedTypeNode { Name: "Int" }] } }]);
+}
+{
+    // any P — existential.
+    var unit = ParseSource("func render(shapes: [any Drawable]) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'[any Drawable]' (existential inside array sugar) parses correctly",
+        fn?.Parameters is [Parameter { Type: ArrayTypeNode { ElementType: ExistentialTypeNode { Protocols: ["Drawable"] } } }]);
+}
+{
+    // any P & Q — existential with protocol composition.
+    var unit = ParseSource("func describe(item: any Drawable & Comparable) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'any Drawable & Comparable' protocol composition parses correctly",
+        fn?.Parameters is [Parameter { Type: ExistentialTypeNode { Protocols: ["Drawable", "Comparable"] } }]);
+}
+{
+    // some P — opaque return type.
+    var unit = ParseSource("func makeStack() -> some Container {\n    x\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'-> some Container' opaque return type parses correctly",
+        fn?.ReturnType is OpaqueTypeNode { Protocols: ["Container"] });
+}
+{
+    // Self as a return type — the protocol-requirement use case.
+    var unit = ParseSource("protocol Cloneable {\n    func clone() -> Self\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var protocolDecl = unit.Statements[0] as ProtocolDeclaration;
+    Check("'Self' return type on a protocol requirement parses correctly",
+        protocolDecl?.Members is [FunctionDeclaration { Name: "clone", ReturnType: SelfTypeNode, Body: null }]);
+}
+{
+    // Nested richer types: an array of functions returning optionals.
+    var unit = ParseSource("func f(handlers: [(Int) -> String?]) {}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("nested richer types ('[(Int) -> String?]') parse correctly",
+        fn?.Parameters is
+        [
+            Parameter
+            {
+                Type: ArrayTypeNode
+                {
+                    ElementType: FunctionTypeNode
+                    {
+                        ParameterTypes: [NamedTypeNode { Name: "Int" }],
+                        ReturnType: NamedTypeNode { Name: "String", IsOptional: true },
+                    },
+                },
+            },
+        ]);
+}
+{
+    // Confirms the AST dump renders richer types in a readable,
+    // source-like compact form rather than deep tree nesting.
+    var unit = ParseSource("func f(items: [Int], g: (Int) -> Bool) {}", out var sink);
+    var dump = AstPrinter.Print(unit);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("AST dump renders array/function types compactly",
+        dump.Contains("[Int]") && dump.Contains("(Int) -> Bool"));
 }
 
 // ---------------------------------------------------------------------

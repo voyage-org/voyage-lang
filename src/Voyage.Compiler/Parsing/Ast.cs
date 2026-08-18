@@ -137,16 +137,88 @@ public sealed record ErrorExpression(SourceSpan Span) : Expression(Span);
 // ----------------------------------------------------------------------
 
 /// <summary>
-/// A minimal named type reference, e.g. `Int`, `String`, `String?`.
-/// Scope-limited to a bare identifier with an optional trailing `?`
-/// (Optional&lt;T&gt; sugar) — generic type arguments (`Array&lt;T&gt;`),
-/// array sugar (`[T]`), function types (`(Int) -&gt; String`), and
-/// keyword-spelled type forms (`Self`, `any P`, `some P`, `Optional&lt;T&gt;`
-/// written out) are not yet parsed. This is real, spec'd grammar
-/// (type-system.md), just not yet implemented here — see
-/// Parsing/README.md.
+/// <summary>
+/// Base type for every type-expression node — the AST for what appears
+/// in a type position (`: Type`, `-> Type`, a generic argument, a
+/// function-type parameter). Every concrete form carries `IsOptional`
+/// itself (trailing `?`) rather than optionality being a separate
+/// wrapper node, since `?` can trail any of these forms (`Int?`, `[T]?`,
+/// `(Int) -> String?`, `(any Drawable)?` in real Swift) and threading a
+/// single flag through each case is simpler than a generic
+/// `OptionalTypeNode(Inner)` wrapper would be here.
 /// </summary>
-public sealed record TypeNode(string Name, bool IsOptional, SourceSpan Span) : AstNode(Span);
+public abstract record TypeNode(bool IsOptional, SourceSpan Span) : AstNode(Span);
+
+/// <summary>
+/// A named type reference, with zero or more generic arguments, e.g.
+/// `Int`, `String?`, `Array&lt;T&gt;`, `Stack&lt;Int&gt;`, `Optional&lt;T&gt;`
+/// (written out rather than using `?` sugar). `GenericArguments` is empty
+/// for a non-generic reference like `Int`.
+/// </summary>
+public sealed record NamedTypeNode(
+    string Name,
+    IReadOnlyList<TypeNode> GenericArguments,
+    bool IsOptional,
+    SourceSpan Span) : TypeNode(IsOptional, Span);
+
+/// <summary>
+/// Array sugar, e.g. `[T]`, `[Int]?`. Semantically equivalent to
+/// `Array&lt;T&gt;` (`NamedTypeNode("Array", [T])`, per type-system.md's
+/// primitive-to-CLR mapping table) but kept as its own node since the
+/// two are syntactically distinct forms a user actually chooses between,
+/// and later phases may reasonably want to know which was written.
+/// </summary>
+public sealed record ArrayTypeNode(TypeNode ElementType, bool IsOptional, SourceSpan Span) : TypeNode(IsOptional, Span);
+
+/// <summary>
+/// A function type, e.g. `(Int) -> String`, `(Int, Int) -> Bool`, `() ->
+/// Void` (empty parameter list is valid — a real Swift-style zero-arg
+/// function type). Does not yet parse `async`/`throws` as part of the
+/// function-type signature itself (e.g. `(URL) async throws(NetworkError)
+/// -> Data`, grammar.md Section 3's fetch example) — tracked as a
+/// follow-up alongside the rest of the concurrency/error-handling grammar
+/// this parser hasn't reached yet.
+/// </summary>
+public sealed record FunctionTypeNode(
+    IReadOnlyList<TypeNode> ParameterTypes,
+    TypeNode ReturnType,
+    bool IsOptional,
+    SourceSpan Span) : TypeNode(IsOptional, Span);
+
+/// <summary>
+/// An existential type, `any P` or `any P1 & P2` (protocol composition
+/// via `&`), per type-system.md Section 4. `Protocols` is always at
+/// least one name. Constrained existentials
+/// (`any Container&lt;Element == Int&gt;`-style) are explicitly flagged in
+/// type-system.md as a plausible future addition, not committed to —
+/// not parsed here either.
+/// </summary>
+public sealed record ExistentialTypeNode(
+    IReadOnlyList<string> Protocols,
+    bool IsOptional,
+    SourceSpan Span) : TypeNode(IsOptional, Span);
+
+/// <summary>
+/// An opaque return type, `some P` or `some P1 & P2`, per
+/// type-system.md Section 4. Same protocol-composition shape as
+/// <see cref="ExistentialTypeNode"/> — the two are syntactically
+/// identical apart from the leading keyword, and differ only in
+/// dispatch/erasure semantics, which is a `Semantics/`/`Lowering/`
+/// concern, not a parsing one.
+/// </summary>
+public sealed record OpaqueTypeNode(
+    IReadOnlyList<string> Protocols,
+    bool IsOptional,
+    SourceSpan Span) : TypeNode(IsOptional, Span);
+
+/// <summary>
+/// The capital-`Self` type-reference form (distinct from the lowercase
+/// `self` instance reference, `SelfExpression`) — refers to "the type
+/// currently being defined," e.g. as a protocol requirement's return
+/// type. No generic arguments or further structure; `Self?` is the only
+/// variation.
+/// </summary>
+public sealed record SelfTypeNode(bool IsOptional, SourceSpan Span) : TypeNode(IsOptional, Span);
 
 /// <summary>
 /// A single function parameter, e.g. `a: Int`, `_ value: T` (suppressed

@@ -154,7 +154,7 @@ public static class AstPrinter
                 break;
 
             case TypeNode t:
-                Line($"TypeNode '{t.Name}{(t.IsOptional ? "?" : "")}' @ {t.Span}");
+                Line($"TypeNode '{FormatType(t)}' @ {t.Span}");
                 break;
 
             case ReturnStatement ret:
@@ -329,5 +329,26 @@ public static class AstPrinter
             c.ConformedProtocols.Count == 0
                 ? c.TypeName
                 : $"{c.TypeName}: {string.Join(" & ", c.ConformedProtocols)}"));
+    }
+
+    /// <summary>Renders a <see cref="TypeNode"/> back into a compact,
+    /// source-like single-line string (e.g. `[Int]?`, `(Int) -> String`,
+    /// `any Drawable &amp; Equatable`) for a single dump line, rather than
+    /// recursing through the general `Write` tree-printer — a type
+    /// expression reads far better compact than deeply nested.</summary>
+    private static string FormatType(TypeNode type)
+    {
+        var core = type switch
+        {
+            NamedTypeNode n when n.GenericArguments.Count == 0 => n.Name,
+            NamedTypeNode n => $"{n.Name}<{string.Join(", ", n.GenericArguments.Select(FormatType))}>",
+            ArrayTypeNode a => $"[{FormatType(a.ElementType)}]",
+            FunctionTypeNode f => $"({string.Join(", ", f.ParameterTypes.Select(FormatType))}) -> {FormatType(f.ReturnType)}",
+            ExistentialTypeNode e => $"any {string.Join(" & ", e.Protocols)}",
+            OpaqueTypeNode o => $"some {string.Join(" & ", o.Protocols)}",
+            SelfTypeNode => "Self",
+            _ => $"<unhandled TypeNode {type.GetType().Name}>",
+        };
+        return type.IsOptional ? $"{core}?" : core;
     }
 }

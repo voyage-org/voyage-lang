@@ -626,19 +626,106 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Parses a minimal type reference: a bare identifier with an
-    /// optional trailing `?`. See TypeNode's remarks for what's
-    /// deliberately not yet handled here.
+    /// Parses a type expression. Dispatches on the leading token to one
+    /// of: array sugar (`[T]`), function types (`(T1, T2) -> R`),
+    /// existentials (`any P`), opaque types (`some P`), `Self`, or a
+    /// named type reference with optional generic arguments (`Name`,
+    /// `Name&lt;Arg&gt;`). Any form may carry a trailing `?` for
+    /// `Optional&lt;T&gt;` sugar — applied uniformly via
+    /// <see cref="ApplyTrailingOptional"/> rather than duplicated in
+    /// each case, since `?` can trail any of them.
     /// </summary>
     private TypeNode ParseType()
     {
-        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        var start = Current.Span.Start;
+        TypeNode type = Current.Kind switch
+        {
+            TokenKind.LBracket => ParseArrayType(start),
+            TokenKind.LParen => ParseFunctionType(start),
+            TokenKind.KwAny => ParseProtocolConstraintType(start, isOpaque: false),
+            TokenKind.KwSome => ParseProtocolConstraintType(start, isOpaque: true),
+            TokenKind.KwSelfType => ParseSelfType(),
+            _ => ParseNamedType(start),
+        };
+        return ApplyTrailingOptional(type, start);
+    }
+
+    private TypeNode ApplyTrailingOptional(TypeNode type, SourceLocation start)
+    {
         if (Check(TokenKind.Question))
         {
             var question = Advance();
-            return new TypeNode(nameToken.Text, true, new SourceSpan(nameToken.Span.Start, question.Span.End));
+            return type with { IsOptional = true, Span = new SourceSpan(start, question.Span.End) };
         }
-        return new TypeNode(nameToken.Text, false, nameToken.Span);
+        return type;
+    }
+
+    private TypeNode ParseArrayType(SourceLocation start)
+    {
+        Advance(); // consume '['
+        var element = ParseType();
+        var closeBracket = Expect(TokenKind.RBracket, "Expected ']' to close the array type.");
+        return new ArrayTypeNode(element, false, new SourceSpan(start, closeBracket.Span.End));
+    }
+
+    /// <summary>Parses `(T1, T2, ...) -> R`. A bare parenthesized type
+    /// for grouping (`(Int)` alone, no arrow) is not a supported form —
+    /// every `(` in type position is expected to introduce a function
+    /// type, so `->` is always required after the parameter list.</summary>
+    private TypeNode ParseFunctionType(SourceLocation start)
+    {
+        Advance(); // consume '('
+        var parameterTypes = new List<TypeNode>();
+        if (!Check(TokenKind.RParen))
+        {
+            parameterTypes.Add(ParseType());
+            while (Match(TokenKind.Comma))
+            {
+                parameterTypes.Add(ParseType());
+            }
+        }
+        Expect(TokenKind.RParen, "Expected ')' to close the function type's parameter list.");
+        Expect(TokenKind.Arrow, "Expected '->' in function type.");
+        var returnType = ParseType();
+        return new FunctionTypeNode(parameterTypes, returnType, false, new SourceSpan(start, returnType.Span.End));
+    }
+
+    private TypeNode ParseProtocolConstraintType(SourceLocation start, bool isOpaque)
+    {
+        Advance(); // consume 'any' / 'some'
+        var protocols = new List<string> { Expect(TokenKind.Identifier, "Expected a protocol name.").Text };
+        while (Match(TokenKind.Amp))
+        {
+            protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+        }
+        var end = Current.Span.Start;
+        var span = new SourceSpan(start, end);
+        return isOpaque
+            ? new OpaqueTypeNode(protocols, false, span)
+            : new ExistentialTypeNode(protocols, false, span);
+    }
+
+    private TypeNode ParseSelfType()
+    {
+        var token = Advance(); // consume 'Self'
+        return new SelfTypeNode(false, token.Span);
+    }
+
+    private TypeNode ParseNamedType(SourceLocation start)
+    {
+        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        var genericArguments = new List<TypeNode>();
+        if (Match(TokenKind.Less))
+        {
+            genericArguments.Add(ParseType());
+            while (Match(TokenKind.Comma))
+            {
+                genericArguments.Add(ParseType());
+            }
+            Expect(TokenKind.Greater, "Expected '>' to close the generic argument list.");
+        }
+        var end = Current.Span.Start;
+        return new NamedTypeNode(nameToken.Text, genericArguments, false, new SourceSpan(start, end));
     }
 
     /// <summary>

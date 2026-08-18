@@ -146,7 +146,8 @@ why, if you're wondering.
 - [x] Parser: `protocol`/`extension` declarations, conformance/inheritance clauses (also retrofitted onto `struct`/`enum`) — 152/152 checks passing
 - [x] Parser: generics — `<T>`, `<T: Protocol & Protocol>`, `where` clauses, parameter labels (`_ name: Type`, `external internal: Type`) — 174/174 checks passing
 - [x] Parser: member access (`.`), subscripting (`[...]`), `self` — 192/192 checks passing
-- [ ] Parser: richer type syntax (`Array<T>`, `[T]`, `(Int) -> String`, `any`/`some`/`Self`), `switch`, `for`-`in`
+- [x] Parser: richer type syntax — `[T]`, `(Int) -> Bool`, `Stack<Int>`, `any`/`some`, `Self` (all nesting freely) — 216/216 checks passing
+- [ ] Parser: `switch`, `for`-`in`
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

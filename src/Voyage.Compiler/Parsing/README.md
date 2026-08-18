@@ -103,24 +103,30 @@ Implemented:
   `a.b[0].c()` parses correctly. `self` (lowercase, the instance
   reference) is now a valid primary expression too, which member access
   depended on in practice (`self.x` is the single most common real use).
-  `Self` (capital-S, the type-reference form) is still not parseable —
-  that's part of the richer type syntax gap below.
+- Richer type syntax: `TypeNode` is a real recursive type-expression
+  tree (`NamedTypeNode`, `ArrayTypeNode`, `FunctionTypeNode`,
+  `ExistentialTypeNode`, `OpaqueTypeNode`, `SelfTypeNode`), not a flat
+  bare-identifier-plus-`?` record anymore. Covers array sugar (`[T]`),
+  function types (`(Int, Int) -> Bool`, including zero-parameter `() ->
+  Void`), generic type arguments at use sites (`Stack<Int>`), `any P`/
+  `some P` (including `&`-composed protocol constraints), and `Self` as
+  a type. All forms nest freely (`[(Int) -> String?]` parses) and all
+  can carry a trailing `?`, applied uniformly via one shared helper
+  rather than duplicated per form. `type-system.md`'s own `firstMatch<T>`
+  example — the exact case flagged as still-blocked when generics first
+  landed — now parses fully end-to-end.
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
 rather than a crash or silently-dropped content, so a file mixing
 supported and unsupported constructs still parses as far as it can:
-- Generic *type arguments at use sites* (`Stack<Int>`, `Array<T>`) —
-  generic parameter *declarations* (`struct Stack<T>`) are supported
-  (above), but referencing a generic type with concrete/generic
-  arguments filled in is part of the richer-type-syntax gap below.
-- Richer type syntax generally: generic type arguments (`Array<T>`),
-  array sugar (`[T]`), function types (`(Int) -> String`), and
-  keyword-spelled type forms (`Self`, `any P`, `some P`) — only
-  bare-identifier types (plus trailing `?`) are parsed so far. This
-  means `type-system.md`'s own generic examples using `[T]`/`(T) ->
-  Bool` parameter types still don't fully parse end-to-end yet, even
-  though the `<T>`/`where` machinery around them now does.
+- `async`/`throws` as part of a function *type* signature (e.g. `(URL)
+  async throws(NetworkError) -> Data`, grammar.md Section 3's `fetch`
+  example) — `FunctionTypeNode` covers the parameter-types-plus-return
+  shape only so far.
+- Constrained existentials (`any Container<Element == Int>`-style) —
+  `type-system.md` itself flags this as a plausible future addition, not
+  committed to; not parsed here either.
 - `if let`/`if case` conditional binding forms — only a plain
   boolean-valued condition expression is recognized
 - `switch`, `for`-`in`, `guard`, `repeat`-`while`
@@ -157,14 +163,9 @@ construct's happy path is unaffected and covered by tests.
 
 ## Next milestone
 
-Richer type syntax (`Array<T>`, `[T]`, `(Int) -> String`, `any P`/`some
-P`, `Self`) is now the clearest remaining gap — it's what's blocking
-`type-system.md`'s own generic examples from fully parsing, and member
-access no longer competes with it as "the other obvious next thing"
-since it's done. Otherwise: `switch` (a real design question, since
-meaningful pattern matching needs `enum` cases to match against, which
-now exist) → `for`-`in` (needs the range operators already lexed but not
-yet wired into any grammar construct) → error handling (`throws`) →
-concurrency (`actor`/`task{}`, saved for last as the most complex
-slice). No fixed order is binding — pick whichever construct unblocks
-the most useful next test case.
+`switch` — a real design question now that meaningful pattern matching
+has `enum` cases to match against. After that: `for`-`in` (needs the
+range operators already lexed but not yet wired into any grammar
+construct) → error handling (`throws`) → concurrency (`actor`/`task{}`,
+saved for last as the most complex slice). No fixed order is binding —
+pick whichever construct unblocks the most useful next test case.
