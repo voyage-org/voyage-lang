@@ -1135,7 +1135,7 @@ public sealed class Parser
                 return ParseParenthesizedExpression();
 
             case TokenKind.InterpolationStringStart:
-                return ParseUnsupportedInterpolatedString();
+                return ParseInterpolatedString();
 
             default:
                 _diagnostics.Report(new Diagnostic(
@@ -1162,37 +1162,56 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// String interpolation parsing is explicitly out of scope for this
-    /// milestone (grammar.md Section 10 defines it; this parser doesn't
-    /// implement it yet). Rather than mis-parsing the interpolation's
-    /// structural tokens as something else, this reports a clear
-    /// diagnostic and skips to the matching InterpolationStringEnd.
+    /// Parses an interpolated string, e.g. `"Hello, \(name)!"`. The
+    /// lexer has already done the hard part (tracking paren depth so a
+    /// nested call like `\(f(x, y))` doesn't prematurely close the
+    /// interpolation — see `Lexing/Lexer.cs`); the parser just consumes
+    /// the alternating text/expression token sequence
+    /// (`InterpolationStringStart` [expr `InterpolationStringMiddle`
+    /// expr ...] `InterpolationStringEnd`) and calls `ParseExpression`
+    /// normally for each embedded expression.
     /// </summary>
-    private Expression ParseUnsupportedInterpolatedString()
+    private Expression ParseInterpolatedString()
     {
         var start = Current.Span.Start;
-        _diagnostics.Report(new Diagnostic(
-            DiagnosticSeverity.Error,
-            "String interpolation is not yet supported by this parser milestone " +
-            "(see src/Voyage.Compiler/Parsing/README.md).",
-            SourceSpan.At(start)));
+        var segments = new List<InterpolatedStringSegment>();
 
-        Advance(); // consume InterpolationStringStart
-        var depth = 1;
-        while (depth > 0 && !IsAtEnd)
+        var startToken = Advance(); // consume InterpolationStringStart
+        segments.Add(new InterpolatedStringTextSegment((string)startToken.LiteralValue!, startToken.Span));
+
+        while (true)
         {
-            switch (Current.Kind)
+            var exprStart = Current.Span.Start;
+            var expr = ParseExpression();
+            segments.Add(new InterpolatedStringExpressionSegment(expr, new SourceSpan(exprStart, Current.Span.Start)));
+
+            if (Check(TokenKind.InterpolationStringMiddle))
             {
-                case TokenKind.InterpolationStringStart:
-                    depth++;
-                    break;
-                case TokenKind.InterpolationStringEnd:
-                    depth--;
-                    break;
+                var middleToken = Advance();
+                segments.Add(new InterpolatedStringTextSegment((string)middleToken.LiteralValue!, middleToken.Span));
+                continue; // another interpolation follows
             }
-            Advance();
+
+            if (Check(TokenKind.InterpolationStringEnd))
+            {
+                var endToken = Advance();
+                segments.Add(new InterpolatedStringTextSegment((string)endToken.LiteralValue!, endToken.Span));
+                break;
+            }
+
+            // The lexer's InterpolationString* token sequence guarantees
+            // one of the two cases above follows every embedded
+            // expression for well-formed input; this is a defensive
+            // guard against malformed/unexpected token streams, not a
+            // path well-formed source should ever reach.
+            _diagnostics.Report(new Diagnostic(
+                DiagnosticSeverity.Error,
+                "Expected the string to continue or close after an interpolated expression.",
+                SourceSpan.At(Current.Span.Start)));
+            break;
         }
 
-        return new ErrorExpression(new SourceSpan(start, Current.Span.Start));
+        var end = Current.Span.Start;
+        return new InterpolatedStringExpression(segments, new SourceSpan(start, end));
     }
 }

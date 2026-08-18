@@ -147,6 +147,7 @@ why, if you're wondering.
 - [x] Parser: generics — `<T>`, `<T: Protocol & Protocol>`, `where` clauses, parameter labels (`_ name: Type`, `external internal: Type`) — 174/174 checks passing
 - [x] Parser: member access (`.`), subscripting (`[...]`), `self` — 192/192 checks passing
 - [x] Parser: richer type syntax — `[T]`, `(Int) -> Bool`, `Stack<Int>`, `any`/`some`, `Self` (all nesting freely) — 216/216 checks passing
+- [x] Parser: string interpolation (`"Hello, \(name)!"`), including nested calls and member access inside interpolations — 228/228 checks passing
 - [ ] Parser: `switch`, `for`-`in`
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program

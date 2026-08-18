@@ -41,12 +41,51 @@ public enum UnaryOperator
 public sealed record IdentifierExpression(string Name, SourceSpan Span) : Expression(Span);
 
 /// <summary>
-/// A non-interpolated string literal, e.g. `"Hello, Voyage."`.
-/// Interpolated strings (`"\(...)"`) are not yet parsed — see this
-/// file's remarks and Parsing/README.md for why that's an explicit,
-/// tracked scope limit rather than an oversight.
+/// A non-interpolated string literal, e.g. `"Hello, Voyage."`. A string
+/// containing at least one `\(...)` interpolation parses as an
+/// <see cref="InterpolatedStringExpression"/> instead — the lexer already
+/// distinguishes the two cases (`StringLiteral` vs.
+/// `InterpolationStringStart`/`Middle`/`End`), so there's no ambiguity
+/// about which node a given string literal becomes.
 /// </summary>
 public sealed record StringLiteralExpression(string Value, SourceSpan Span) : Expression(Span);
+
+/// <summary>
+/// A single piece of an <see cref="InterpolatedStringExpression"/>:
+/// either a literal run of text between interpolations, or an embedded
+/// expression. One shared base rather than two unrelated node types
+/// since both only ever appear inside `Segments`, in the exact order
+/// they appeared in the source.
+/// </summary>
+public abstract record InterpolatedStringSegment(SourceSpan Span) : AstNode(Span);
+
+/// <summary>A literal text run inside an interpolated string, e.g. the
+/// `"Hello, "` and `"!"` either side of `\(name)` in `"Hello,
+/// \(name)!"`. May be empty (`""`) — e.g. between two adjacent
+/// interpolations (`"\(a)\(b)"`) or at either end of the string when an
+/// interpolation is the very first/last thing — always present rather
+/// than omitted, for a uniform segment shape downstream phases can rely
+/// on without special-casing.</summary>
+public sealed record InterpolatedStringTextSegment(string Text, SourceSpan Span) : InterpolatedStringSegment(Span);
+
+/// <summary>An embedded expression inside an interpolated string, e.g.
+/// the `name` in `"Hello, \(name)!"`. Can be any expression, including
+/// another interpolated string or a call with nested parentheses — the
+/// lexer already handles arbitrary nesting via paren-depth tracking
+/// (`Lexing/Lexer.cs`), so the parser just calls `ParseExpression`
+/// normally here with no special handling needed.</summary>
+public sealed record InterpolatedStringExpressionSegment(Expression Expression, SourceSpan Span) : InterpolatedStringSegment(Span);
+
+/// <summary>
+/// A string literal containing at least one `\(...)` interpolation, e.g.
+/// `"Hello, \(name)! You are \(age) years old."`. `Segments` alternates
+/// text and expression segments in source order, always starting and
+/// ending with a (possibly empty) text segment — matching the lexer's
+/// `InterpolationStringStart ... Middle ... End` token sequence exactly.
+/// </summary>
+public sealed record InterpolatedStringExpression(
+    IReadOnlyList<InterpolatedStringSegment> Segments,
+    SourceSpan Span) : Expression(Span);
 
 public sealed record IntegerLiteralExpression(long Value, SourceSpan Span) : Expression(Span);
 

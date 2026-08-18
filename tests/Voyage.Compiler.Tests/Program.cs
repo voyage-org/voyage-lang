@@ -369,15 +369,26 @@ Console.WriteLine("=== Parser: not-yet-supported constructs degrade gracefully =
         });
 }
 {
-    // String interpolation is real, valid voyage-lang (grammar.md
-    // Section 10) but explicitly out of scope for this parser
-    // milestone too — same graceful-degradation contract.
+    // String interpolation now genuinely works — this exact case (a
+    // single embedded identifier as a call argument) was the "known
+    // unsupported" example throughout every earlier milestone; it's now
+    // a real, positively-tested feature.
     var unit = ParseSource("print(\"Hello, \\(name)!\")", out var sink);
-    Check("interpolation reports exactly one diagnostic",
-        sink.Diagnostics.Count == 1, string.Join("; ", sink.Diagnostics));
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
     var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
-    Check("interpolated argument becomes an ErrorExpression, not a crash",
-        call?.Arguments is [ErrorExpression]);
+    Check("interpolated string parses with the expected text/expression segments",
+        call?.Arguments is
+        [
+            InterpolatedStringExpression
+            {
+                Segments:
+                [
+                    InterpolatedStringTextSegment { Text: "Hello, " },
+                    InterpolatedStringExpressionSegment { Expression: IdentifierExpression { Name: "name" } },
+                    InterpolatedStringTextSegment { Text: "!" },
+                ],
+            },
+        ]);
 }
 
 // ---------------------------------------------------------------------
@@ -1426,6 +1437,149 @@ Console.WriteLine("=== Richer type syntax ===");
     Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
     Check("AST dump renders array/function types compactly",
         dump.Contains("[Int]") && dump.Contains("(Int) -> Bool"));
+}
+
+// ---------------------------------------------------------------------
+// 20. String interpolation
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== String interpolation ===");
+{
+    // grammar.md Section 1's own example: two interpolations in one string.
+    var unit = ParseSource("print(\"Hello, \\(name)! You are \\(age) years old.\")", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("grammar.md's own two-interpolation example parses correctly",
+        call?.Arguments is
+        [
+            InterpolatedStringExpression
+            {
+                Segments:
+                [
+                    InterpolatedStringTextSegment { Text: "Hello, " },
+                    InterpolatedStringExpressionSegment { Expression: IdentifierExpression { Name: "name" } },
+                    InterpolatedStringTextSegment { Text: "! You are " },
+                    InterpolatedStringExpressionSegment { Expression: IdentifierExpression { Name: "age" } },
+                    InterpolatedStringTextSegment { Text: " years old." },
+                ],
+            },
+        ]);
+}
+{
+    // A nested call inside the interpolation — the specific case the
+    // lexer's paren-depth tracking exists for (Lexing/Lexer.cs), now
+    // exercised through the parser too: the inner ')' from f(x, y) must
+    // not be mistaken for the interpolation's own closing ')'.
+    var unit = ParseSource("print(\"Result: \\(f(x, y))!\")", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("nested call expression inside an interpolation parses correctly",
+        call?.Arguments is
+        [
+            InterpolatedStringExpression
+            {
+                Segments:
+                [
+                    InterpolatedStringTextSegment { Text: "Result: " },
+                    InterpolatedStringExpressionSegment
+                    {
+                        Expression: CallExpression
+                        {
+                            Callee: IdentifierExpression { Name: "f" },
+                            Arguments: [IdentifierExpression { Name: "x" }, IdentifierExpression { Name: "y" }],
+                        },
+                    },
+                    InterpolatedStringTextSegment { Text: "!" },
+                ],
+            },
+        ]);
+}
+{
+    // Two adjacent interpolations with no text between them — exercises
+    // the empty-text-segment case (InterpolationStringMiddle with "").
+    var unit = ParseSource("print(\"\\(a)\\(b)\")", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("adjacent interpolations with empty text segments in between parse correctly",
+        call?.Arguments is
+        [
+            InterpolatedStringExpression
+            {
+                Segments:
+                [
+                    InterpolatedStringTextSegment { Text: "" },
+                    InterpolatedStringExpressionSegment { Expression: IdentifierExpression { Name: "a" } },
+                    InterpolatedStringTextSegment { Text: "" },
+                    InterpolatedStringExpressionSegment { Expression: IdentifierExpression { Name: "b" } },
+                    InterpolatedStringTextSegment { Text: "" },
+                ],
+            },
+        ]);
+}
+{
+    // A full binary expression embedded in the interpolation, not just
+    // a bare identifier — confirms the parser calls ordinary
+    // ParseExpression (full precedence ladder) for the embedded part,
+    // not some restricted sub-grammar.
+    var unit = ParseSource("print(\"Total: \\(a + b * c)\")", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("a full binary expression embeds correctly inside an interpolation",
+        call?.Arguments is
+        [
+            InterpolatedStringExpression
+            {
+                Segments:
+                [
+                    InterpolatedStringTextSegment { Text: "Total: " },
+                    InterpolatedStringExpressionSegment
+                    {
+                        Expression: BinaryExpression
+                        {
+                            Operator: BinaryOperator.Add,
+                            Right: BinaryExpression { Operator: BinaryOperator.Multiply },
+                        },
+                    },
+                    InterpolatedStringTextSegment { Text: "" },
+                ],
+            },
+        ]);
+}
+{
+    // Member access inside an interpolation — self.x-style, the
+    // realistic case a Description-style method would actually use.
+    var unit = ParseSource("func describe() -> String {\n    \"Point(\\(self.x), \\(self.y))\"\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("grammar.md Section 5's own 'Point(\\(x), \\(y))'-style dump interpolation parses correctly",
+        fn?.Body is
+        [
+            ExpressionStatement
+            {
+                Expression: InterpolatedStringExpression
+                {
+                    Segments:
+                    [
+                        InterpolatedStringTextSegment { Text: "Point(" },
+                        InterpolatedStringExpressionSegment { Expression: MemberAccessExpression { MemberName: "x", Target: SelfExpression } },
+                        InterpolatedStringTextSegment { Text: ", " },
+                        InterpolatedStringExpressionSegment { Expression: MemberAccessExpression { MemberName: "y", Target: SelfExpression } },
+                        InterpolatedStringTextSegment { Text: ")" },
+                    ],
+                },
+            },
+        ]);
+}
+{
+    // A plain, non-interpolated string is completely unaffected —
+    // confirms StringLiteralExpression and InterpolatedStringExpression
+    // are cleanly distinguished by the lexer with no parser-side
+    // ambiguity between the two.
+    var unit = ParseSource("print(\"just plain text\")", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("a plain string with no interpolation still parses as StringLiteralExpression",
+        call?.Arguments is [StringLiteralExpression { Value: "just plain text" }]);
 }
 
 // ---------------------------------------------------------------------

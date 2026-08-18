@@ -222,6 +222,24 @@ public static class AstPrinter
                 Line($"StringLiteralExpression \"{str.Value}\" @ {str.Span}");
                 break;
 
+            case InterpolatedStringExpression interp:
+                Line($"InterpolatedStringExpression @ {interp.Span}");
+                Line2("segments:", sb, indent + 1);
+                foreach (var segment in interp.Segments)
+                {
+                    Write(segment, sb, indent + 2);
+                }
+                break;
+
+            case InterpolatedStringTextSegment text:
+                Line($"InterpolatedStringTextSegment \"{text.Text}\" @ {text.Span}");
+                break;
+
+            case InterpolatedStringExpressionSegment exprSeg:
+                Line($"InterpolatedStringExpressionSegment @ {exprSeg.Span}");
+                Write(exprSeg.Expression, sb, indent + 1);
+                break;
+
             case IntegerLiteralExpression i:
                 Line($"IntegerLiteralExpression {i.Value} @ {i.Span}");
                 break;

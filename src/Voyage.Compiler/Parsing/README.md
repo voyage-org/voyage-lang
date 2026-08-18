@@ -115,6 +115,19 @@ Implemented:
   rather than duplicated per form. `type-system.md`'s own `firstMatch<T>`
   example — the exact case flagged as still-blocked when generics first
   landed — now parses fully end-to-end.
+- String interpolation (`"Hello, \(name)!"`): `InterpolatedStringExpression`
+  holds an alternating list of text and expression segments, always
+  starting and ending with a (possibly empty) text segment — matching
+  the lexer's `InterpolationStringStart`/`Middle`/`End` token sequence
+  exactly. Each embedded expression is parsed with the ordinary
+  `ParseExpression` (full precedence ladder, calls, member access,
+  everything), and correctly handles a nested call's own parentheses
+  (`"\(f(x, y))"`) without confusing them for the interpolation's
+  closing paren — the lexer's paren-depth tracking (`Lexing/Lexer.cs`)
+  does the hard part; the parser just consumes the resulting token
+  sequence. grammar.md Section 5's own `"Point(\(x), \(y))"` extension
+  example, with `self.x`/`self.y` member access embedded inside, now
+  parses fully end-to-end for the first time.
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -131,7 +144,6 @@ supported and unsupported constructs still parses as far as it can:
   boolean-valued condition expression is recognized
 - `switch`, `for`-`in`, `guard`, `repeat`-`while`
 - `actor`
-- String interpolation (`"\(...)"`)
 - Ternary (`?:`), `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
   into the expression grammar since nothing consumes them yet (`for`-`in`
