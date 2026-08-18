@@ -1153,6 +1153,141 @@ Console.WriteLine("=== Generics ===");
 }
 
 // ---------------------------------------------------------------------
+// 18. Member access ('.'), subscripting ('[]'), and 'self'
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== Member access, subscripting, self ===");
+{
+    var unit = ParseSource("f(point.x)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'point.x' parses as a MemberAccessExpression",
+        call?.Arguments is [MemberAccessExpression { MemberName: "x", Target: IdentifierExpression { Name: "point" } }]);
+}
+{
+    var unit = ParseSource("f(a.b.c)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("chained member access 'a.b.c' nests correctly (outer target is itself a MemberAccessExpression)",
+        call?.Arguments is
+        [
+            MemberAccessExpression
+            {
+                MemberName: "c",
+                Target: MemberAccessExpression { MemberName: "b", Target: IdentifierExpression { Name: "a" } },
+            },
+        ]);
+}
+{
+    var unit = ParseSource("f(items[0])", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("'items[0]' parses as a SubscriptExpression",
+        call?.Arguments is
+        [
+            SubscriptExpression
+            {
+                Target: IdentifierExpression { Name: "items" },
+                Arguments: [IntegerLiteralExpression { Value: 0 }],
+            },
+        ]);
+}
+{
+    // Multiple comma-separated subscript arguments, e.g. matrix[row, col].
+    var unit = ParseSource("f(matrix[row, col])", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("multi-argument subscript 'matrix[row, col]' parses correctly",
+        call?.Arguments is
+        [
+            SubscriptExpression
+            {
+                Target: IdentifierExpression { Name: "matrix" },
+                Arguments: [IdentifierExpression { Name: "row" }, IdentifierExpression { Name: "col" }],
+            },
+        ]);
+}
+{
+    // Interleaved postfix forms: a.b[0].c() — member access, subscript,
+    // member access, and a call, all chaining correctly in sequence.
+    var unit = ParseSource("a.b[0].c()", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var expr = ((ExpressionStatement)unit.Statements[0]).Expression;
+    Check("interleaved '.'/'[]'/'()' postfix forms all chain correctly",
+        expr is CallExpression
+        {
+            Callee: MemberAccessExpression
+            {
+                MemberName: "c",
+                Target: SubscriptExpression
+                {
+                    Arguments: [IntegerLiteralExpression { Value: 0 }],
+                    Target: MemberAccessExpression { MemberName: "b", Target: IdentifierExpression { Name: "a" } },
+                },
+            },
+        });
+}
+{
+    var unit = ParseSource("f(self)", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
+    Check("bare 'self' parses as SelfExpression", call?.Arguments is [SelfExpression]);
+}
+{
+    // The actual real-world case this milestone exists for: a struct
+    // method genuinely mutating its own state via 'self.x = 0', not the
+    // bare-identifier 'x = 0' workaround used before member access existed.
+    var unit = ParseSource("struct Point {\n    var x: Double\n    func reset() {\n        self.x = 0\n    }\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var structDecl = unit.Statements[0] as StructDeclaration;
+    Check("'self.x = 0' inside a struct method parses correctly",
+        structDecl?.Members is
+        [
+            BindingStatement { Name: "x" },
+            FunctionDeclaration
+            {
+                Name: "reset",
+                Body:
+                [
+                    AssignmentStatement
+                    {
+                        Target: MemberAccessExpression { MemberName: "x", Target: SelfExpression },
+                        Value: IntegerLiteralExpression { Value: 0 },
+                    },
+                ],
+            },
+        ]);
+}
+{
+    // Subscript assignment: items[0] = 1.
+    var unit = ParseSource("items[0] = 1", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("'items[0] = 1' (subscript assignment target) parses correctly",
+        unit.Statements is
+        [
+            AssignmentStatement
+            {
+                Target: SubscriptExpression { Target: IdentifierExpression { Name: "items" }, Arguments: [IntegerLiteralExpression { Value: 0 }] },
+                Value: IntegerLiteralExpression { Value: 1 },
+            },
+        ]);
+}
+{
+    // Confirms member access participates correctly in the full
+    // precedence ladder, not just isolated as a call argument.
+    var unit = ParseSource("if point.x > 0 && point.y > 0 { go() }", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var ifStmt = unit.Statements[0] as IfStatement;
+    Check("member access inside a full binary-operator condition parses correctly",
+        ifStmt?.Condition is BinaryExpression
+        {
+            Operator: BinaryOperator.LogicalAnd,
+            Left: BinaryExpression { Left: MemberAccessExpression { MemberName: "x" } },
+            Right: BinaryExpression { Left: MemberAccessExpression { MemberName: "y" } },
+        });
+}
+
+// ---------------------------------------------------------------------
 Console.WriteLine();
 Console.WriteLine($"=== {passes} passed, {failures} failed ===");
 return failures == 0 ? 0 : 1;

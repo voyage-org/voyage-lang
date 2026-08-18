@@ -56,6 +56,13 @@ public sealed record BooleanLiteralExpression(bool Value, SourceSpan Span) : Exp
 
 public sealed record NilLiteralExpression(SourceSpan Span) : Expression(Span);
 
+/// <summary>The lowercase `self` keyword, referring to the current
+/// instance — e.g. `self.x` inside a method body. Distinct from `Self`
+/// (the capital-S type-reference form, `KwSelfType`), which is not yet
+/// a parseable expression/type form — see Parsing/README.md's richer
+/// type syntax gap.</summary>
+public sealed record SelfExpression(SourceSpan Span) : Expression(Span);
+
 /// <summary>A parenthesized expression, e.g. `(x)`. Kept as its own node
 /// (rather than discarded during parsing) so a future pretty-printer or
 /// source-preserving tool can round-trip explicit grouping.</summary>
@@ -68,6 +75,31 @@ public sealed record ParenthesizedExpression(Expression Inner, SourceSpan Span) 
 /// </summary>
 public sealed record CallExpression(
     Expression Callee,
+    IReadOnlyList<Expression> Arguments,
+    SourceSpan Span) : Expression(Span);
+
+/// <summary>
+/// A member access expression, e.g. `point.x`, `self.balance`,
+/// `a.b.c` (chained — the outer `MemberAccessExpression`'s `Target` is
+/// itself a `MemberAccessExpression`). `MemberName` is always a plain
+/// identifier syntactically (`.name`), never an arbitrary expression, so
+/// it's stored as a string rather than an `Expression` — unlike
+/// `CallExpression.Callee`, which genuinely can be complex.
+/// </summary>
+public sealed record MemberAccessExpression(
+    Expression Target,
+    string MemberName,
+    SourceSpan Span) : Expression(Span);
+
+/// <summary>
+/// A subscript expression, e.g. `items[0]`, `matrix[row, col]` (multiple
+/// comma-separated arguments — Swift subscripts can take more than one).
+/// Reuses the same argument-list shape as <see cref="CallExpression"/>,
+/// since `[...]` and `(...)` argument lists are structurally identical
+/// once you're past the opening bracket/paren.
+/// </summary>
+public sealed record SubscriptExpression(
+    Expression Target,
     IReadOnlyList<Expression> Arguments,
     SourceSpan Span) : Expression(Span);
 

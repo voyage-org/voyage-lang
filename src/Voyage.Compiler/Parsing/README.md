@@ -90,12 +90,21 @@ Implemented:
   parameters, since the two have identical shape. Swift's
   comma-separated multi-case shorthand (`case a, b, c`) isn't supported.
 - Assignment statements: `x = 0`, plus the compound forms `+=`, `-=`,
-  `*=`, `/=`. `Target` is a full expression, not just an identifier, so
-  `self.x = 0`/`items[0] = 0`-style targets become valid automatically
-  once member access/subscripting exist — no change needed here when
-  that happens. Whether a given `Target` is actually assignable (an
-  lvalue) is a `Semantics/` question; `Parsing/` stays permissive about
-  shape, same philosophy as everywhere else in this list.
+  `*=`, `/=`. `Target` is a full expression, not just an identifier —
+  `self.x = 0`/`items[0] = 0`-style targets work as of member
+  access/subscripting below, with zero changes needed to
+  `AssignmentStatement` itself when they landed, exactly as predicted
+  when assignment was first added. Whether a given `Target` is actually
+  assignable (an lvalue) is a `Semantics/` question; `Parsing/` stays
+  permissive about shape, same philosophy as everywhere else in this
+  list.
+- Member access (`.`) and subscripting (`[...]`), including chaining and
+  interleaving both with each other and with call expressions —
+  `a.b[0].c()` parses correctly. `self` (lowercase, the instance
+  reference) is now a valid primary expression too, which member access
+  depended on in practice (`self.x` is the single most common real use).
+  `Self` (capital-S, the type-reference form) is still not parseable —
+  that's part of the richer type syntax gap below.
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -117,7 +126,7 @@ supported and unsupported constructs still parses as far as it can:
 - `switch`, `for`-`in`, `guard`, `repeat`-`while`
 - `actor`
 - String interpolation (`"\(...)"`)
-- Member access (`.`), subscripting, ternary, `as`-casting
+- Ternary (`?:`), `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
   into the expression grammar since nothing consumes them yet (`for`-`in`
   doesn't exist)
@@ -149,13 +158,13 @@ construct's happy path is unaffected and covered by tests.
 ## Next milestone
 
 Richer type syntax (`Array<T>`, `[T]`, `(Int) -> String`, `any P`/`some
-P`) is arguably the natural follow-up to generics — it's what's now
-blocking `type-system.md`'s own generic examples from fully parsing.
-Member access (`.`) and subscripting (`[]`) are also a real, practically-
-felt gap (nothing can read a struct's own field back yet). Otherwise:
-`switch` (a real design question, since meaningful pattern matching needs
-`enum` cases to match against, which now exist) → `for`-`in` (needs the
-range operators already lexed but not yet wired into any grammar
-construct) → error handling (`throws`) → concurrency (`actor`/`task{}`,
-saved for last as the most complex slice). No fixed order is binding —
-pick whichever construct unblocks the most useful next test case.
+P`, `Self`) is now the clearest remaining gap — it's what's blocking
+`type-system.md`'s own generic examples from fully parsing, and member
+access no longer competes with it as "the other obvious next thing"
+since it's done. Otherwise: `switch` (a real design question, since
+meaningful pattern matching needs `enum` cases to match against, which
+now exist) → `for`-`in` (needs the range operators already lexed but not
+yet wired into any grammar construct) → error handling (`throws`) →
+concurrency (`actor`/`task{}`, saved for last as the most complex
+slice). No fixed order is binding — pick whichever construct unblocks
+the most useful next test case.

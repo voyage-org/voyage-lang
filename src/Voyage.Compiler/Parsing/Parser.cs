@@ -935,20 +935,31 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// Handles postfix constructs applied to a primary expression. Only
-    /// call expressions are implemented this milestone; member access
-    /// (`.`) and subscripting (`[...]`) are explicit next-milestone
-    /// items, not silently ignored — they simply aren't reached here
-    /// yet, and a `.`/`[` after a primary expression will surface as an
-    /// "expected end of statement" diagnostic from the caller instead of
-    /// being parsed, which is an accurate (if not yet friendly) signal
-    /// that the construct isn't supported yet.
+    /// Handles postfix constructs applied to a primary expression: call
+    /// expressions (`(...)`), member access (`.name`), and subscripting
+    /// (`[...]`), all of which can chain and interleave — `a.b[0].c()`
+    /// parses as `Call(MemberAccess(Subscript(MemberAccess(a, b), 0), c))`.
     /// </summary>
     private Expression ParsePostfix(Expression expr)
     {
-        while (Check(TokenKind.LParen))
+        while (true)
         {
-            expr = ParseCallExpression(expr);
+            if (Check(TokenKind.LParen))
+            {
+                expr = ParseCallExpression(expr);
+            }
+            else if (Check(TokenKind.Dot))
+            {
+                expr = ParseMemberAccessExpression(expr);
+            }
+            else if (Check(TokenKind.LBracket))
+            {
+                expr = ParseSubscriptExpression(expr);
+            }
+            else
+            {
+                break;
+            }
         }
         return expr;
     }
@@ -970,6 +981,33 @@ public sealed class Parser
 
         var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the argument list.");
         return new CallExpression(callee, arguments, new SourceSpan(start, closeParen.Span.End));
+    }
+
+    private MemberAccessExpression ParseMemberAccessExpression(Expression target)
+    {
+        var start = target.Span.Start;
+        Advance(); // consume '.'
+        var memberToken = Expect(TokenKind.Identifier, "Expected a member name after '.'.");
+        return new MemberAccessExpression(target, memberToken.Text, new SourceSpan(start, memberToken.Span.End));
+    }
+
+    private SubscriptExpression ParseSubscriptExpression(Expression target)
+    {
+        var start = target.Span.Start;
+        Advance(); // consume '['
+
+        var arguments = new List<Expression>();
+        if (!Check(TokenKind.RBracket))
+        {
+            arguments.Add(ParseExpression());
+            while (Match(TokenKind.Comma))
+            {
+                arguments.Add(ParseExpression());
+            }
+        }
+
+        var closeBracket = Expect(TokenKind.RBracket, "Expected ']' to close the subscript.");
+        return new SubscriptExpression(target, arguments, new SourceSpan(start, closeBracket.Span.End));
     }
 
     private Expression ParsePrimary()
@@ -1001,6 +1039,10 @@ public sealed class Parser
             case TokenKind.NilLiteral:
                 Advance();
                 return new NilLiteralExpression(token.Span);
+
+            case TokenKind.KwSelfValue:
+                Advance();
+                return new SelfExpression(token.Span);
 
             case TokenKind.LParen:
                 return ParseParenthesizedExpression();

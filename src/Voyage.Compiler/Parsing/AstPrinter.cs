@@ -196,22 +196,26 @@ public static class AstPrinter
             case CallExpression call:
                 Line($"CallExpression @ {call.Span}");
                 WriteLabeled("callee", call.Callee, sb, indent + 1);
-                if (call.Arguments.Count == 0)
-                {
-                    Line2("arguments: (none)", sb, indent + 1);
-                }
-                else
-                {
-                    Line2("arguments:", sb, indent + 1);
-                    foreach (var arg in call.Arguments)
-                    {
-                        Write(arg, sb, indent + 2);
-                    }
-                }
+                WriteExpressionList("arguments", call.Arguments, sb, indent + 1);
+                break;
+
+            case MemberAccessExpression member:
+                Line($"MemberAccessExpression '.{member.MemberName}' @ {member.Span}");
+                WriteLabeled("target", member.Target, sb, indent + 1);
+                break;
+
+            case SubscriptExpression sub:
+                Line($"SubscriptExpression @ {sub.Span}");
+                WriteLabeled("target", sub.Target, sb, indent + 1);
+                WriteExpressionList("arguments", sub.Arguments, sb, indent + 1);
                 break;
 
             case IdentifierExpression id:
                 Line($"IdentifierExpression '{id.Name}' @ {id.Span}");
+                break;
+
+            case SelfExpression self:
+                Line($"SelfExpression @ {self.Span}");
                 break;
 
             case StringLiteralExpression str:
@@ -282,6 +286,23 @@ public static class AstPrinter
         foreach (var s in statements)
         {
             Write(s, sb, indent + 1);
+        }
+    }
+
+    /// <summary>Same shape as <see cref="WriteStatementList"/> but for
+    /// expression lists — call/subscript argument lists.</summary>
+    private static void WriteExpressionList(string label, IReadOnlyList<Expression> expressions, StringBuilder sb, int indent)
+    {
+        if (expressions.Count == 0)
+        {
+            Line2($"{label}: (none)", sb, indent);
+            return;
+        }
+
+        Line2($"{label}:", sb, indent);
+        foreach (var e in expressions)
+        {
+            Write(e, sb, indent + 1);
         }
     }
 
