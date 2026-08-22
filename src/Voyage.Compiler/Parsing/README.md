@@ -128,6 +128,42 @@ Implemented:
   sequence. grammar.md Section 5's own `"Point(\(x), \(y))"` extension
   example, with `self.x`/`self.y` member access embedded inside, now
   parses fully end-to-end for the first time.
+- `switch` statements: grammar.md Section 6's own example
+  (`.circle(let radius)`-style enum-case patterns with associated-value
+  bindings, plus `default:`) parses correctly. Case bodies are
+  deliberately *not* brace-delimited (`ParseCaseBody` runs until the
+  next `case`/`default`/`}`), matching Swift's actual switch shape
+  rather than the brace-delimited bodies every other block construct in
+  this parser uses. Patterns: `_` (wildcard), `let name` (binding),
+  `.caseName(pattern, ...)` (enum-case, nesting recursively — `.some(
+  .circle(let radius))` parses), and a fallback `ExpressionPattern` for
+  value matching (`case 1, 2:`). Per-case `where` guards are supported.
+  `DefaultBody` is `null` (not an empty list) when no `default:` clause
+  is written — the parser doesn't enforce switch exhaustiveness, that's
+  a `Semantics/` question.
+
+**Two real, previously-invisible bugs were found and fixed while
+building this milestone, both around contextual keywords colliding with
+real names** — worth understanding since they affect more than just
+`switch`:
+- `some`/`any`/`Self`/`Optional` are lexed as dedicated keyword tokens
+  (for `some P`, `any P`, `Self`, and `Optional<T>` written out) but
+  also need to remain usable as ordinary *names* — most concretely,
+  `type-system.md`'s own canonical `Optional<T>` definition
+  (`enum Optional<T> { case some(T); case none }`) uses `some`/`none`
+  as real case names, and `extension Optional { ... }` (extending the
+  builtin) is a real, plausible thing to write. Fixed via
+  `ExpectIdentifierLike`/`IsIdentifierLikeToken`, applied uniformly at
+  every "expect a name" call site in the parser (function/type/
+  parameter/binding/case/pattern/member names) rather than patched
+  per-symptom as each one was discovered.
+- Case associated values can be **unlabeled** — `case some(T)` is a
+  bare type with no name at all, which is structurally different from
+  a function parameter (a parameter always needs an internal name to
+  reference in the body; an associated value doesn't). `CaseDeclaration`
+  originally reused `Parameter` for its associated-value list, which
+  can't represent this. Fixed with a dedicated `AssociatedValue(Label:
+  string?, Type)` node instead.
 
 Explicitly **not yet** implemented — each of these produces a clear
 diagnostic and a recovery node (`UnsupportedStatement`/`ErrorExpression`)
@@ -142,7 +178,7 @@ supported and unsupported constructs still parses as far as it can:
   committed to; not parsed here either.
 - `if let`/`if case` conditional binding forms — only a plain
   boolean-valued condition expression is recognized
-- `switch`, `for`-`in`, `guard`, `repeat`-`while`
+- `for`-`in`, `guard`, `repeat`-`while`
 - `actor`
 - Ternary (`?:`), `as`-casting
 - Range operators (`..<`, `...`) — recognized by the lexer, not yet wired
@@ -175,9 +211,8 @@ construct's happy path is unaffected and covered by tests.
 
 ## Next milestone
 
-`switch` — a real design question now that meaningful pattern matching
-has `enum` cases to match against. After that: `for`-`in` (needs the
-range operators already lexed but not yet wired into any grammar
-construct) → error handling (`throws`) → concurrency (`actor`/`task{}`,
-saved for last as the most complex slice). No fixed order is binding —
-pick whichever construct unblocks the most useful next test case.
+`for`-`in` — needs the range operators already lexed but not yet wired
+into any grammar construct. After that: error handling (`throws`) →
+concurrency (`actor`/`task{}`, saved for last as the most complex
+slice). No fixed order is binding — pick whichever construct unblocks
+the most useful next test case.

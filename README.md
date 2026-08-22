@@ -148,7 +148,8 @@ why, if you're wondering.
 - [x] Parser: member access (`.`), subscripting (`[...]`), `self` — 192/192 checks passing
 - [x] Parser: richer type syntax — `[T]`, `(Int) -> Bool`, `Stack<Int>`, `any`/`some`, `Self` (all nesting freely) — 216/216 checks passing
 - [x] Parser: string interpolation (`"Hello, \(name)!"`), including nested calls and member access inside interpolations — 228/228 checks passing
-- [ ] Parser: `switch`, `for`-`in`
+- [x] Parser: `switch` statements with real pattern matching (`.circle(let radius)`, wildcards, guards, nesting) — 248/248 checks passing
+- [ ] Parser: `for`-`in`
 - [ ] Semantic analysis (type checking, name resolution)
 - [ ] CIL code generation, first runnable `.voy` program
 - [ ] `voyage` CLI: `build`, `run`, `repl`

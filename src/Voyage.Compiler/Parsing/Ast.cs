@@ -412,18 +412,28 @@ public sealed record EnumDeclaration(
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
+/// A single associated value inside a `case` declaration, e.g. the
+/// `radius: Double` in `case circle(radius: Double)`, or the bare `T` in
+/// `case some(T)` (type-system.md's own `Optional&lt;T&gt;` definition —
+/// unlabeled associated values are common and real, not an edge case).
+/// `Label` is null for the unlabeled form. Deliberately a distinct node
+/// from <see cref="Parameter"/> rather than reused: a case's associated
+/// value can be a bare type with no name at all, which a function
+/// parameter never can (a parameter always needs an internal name to
+/// reference inside the function body).
+/// </summary>
+public sealed record AssociatedValue(string? Label, TypeNode Type, SourceSpan Span) : AstNode(Span);
+
+/// <summary>
 /// A single `case` inside an `enum` body, e.g. `case circle(radius:
-/// Double)` or a bare `case none` with no associated values.
-/// `AssociatedValues` reuses <see cref="Parameter"/> directly — an
-/// associated-value list has the exact same shape as a function
-/// parameter list (`name: Type, name: Type, ...`), so no new node type
-/// was needed for it. Swift's comma-separated multi-case shorthand
+/// Double)`, `case some(T)` (unlabeled), or a bare `case none` with no
+/// associated values. Swift's comma-separated multi-case shorthand
 /// (`case a, b, c`) is not yet supported — one `case` per declaration
 /// only.
 /// </summary>
 public sealed record CaseDeclaration(
     string Name,
-    IReadOnlyList<Parameter> AssociatedValues,
+    IReadOnlyList<AssociatedValue> AssociatedValues,
     SourceSpan Span) : Statement(Span);
 
 /// <summary>
@@ -506,11 +516,79 @@ public sealed record BreakStatement(SourceSpan Span) : Statement(Span);
 public sealed record ContinueStatement(SourceSpan Span) : Statement(Span);
 
 /// <summary>
+/// Base type for a single `switch`-case pattern. One shared base rather
+/// than unrelated types since patterns nest — an
+/// <see cref="EnumCasePattern"/>'s associated-value slots are themselves
+/// `Pattern`s, recursively (e.g. `.some(.circle(let radius))`).
+/// </summary>
+public abstract record Pattern(SourceSpan Span) : AstNode(Span);
+
+/// <summary>The wildcard pattern, `_` — matches anything, binds nothing.</summary>
+public sealed record WildcardPattern(SourceSpan Span) : Pattern(Span);
+
+/// <summary>A binding pattern, `let name` — matches anything and binds
+/// it to a new local named `name`. Swift's hoisted form (`case let
+/// .circle(radius):`, one `let` covering every associated value) is not
+/// supported — only the per-slot form shown in grammar.md's own switch
+/// example (`case .circle(let radius):`).</summary>
+public sealed record BindingPattern(string Name, SourceSpan Span) : Pattern(Span);
+
+/// <summary>
+/// An enum-case pattern, e.g. `.circle(let radius)` or a bare `.none`
+/// with no associated values. `AssociatedValues` reuses `Pattern`
+/// recursively for each slot — `_`, `let name`, a nested enum-case
+/// pattern, or an `ExpressionPattern` are all valid there, the same as
+/// at the top level of a `case` clause.
+/// </summary>
+public sealed record EnumCasePattern(
+    string CaseName,
+    IReadOnlyList<Pattern> AssociatedValues,
+    SourceSpan Span) : Pattern(Span);
+
+/// <summary>
+/// A fallback pattern wrapping an ordinary expression, e.g. the `1` in
+/// `case 1, 2:` — matched by value (equality), the exact comparison
+/// semantics being a `Semantics/` concern, not a parsing one. This is
+/// also what any identifier that isn't `_`/`let`/prefixed with `.`
+/// parses as (e.g. matching against a named constant), and what a
+/// range expression will parse as once `..&lt;`/`...` are wired into the
+/// expression grammar.
+/// </summary>
+public sealed record ExpressionPattern(Expression Expression, SourceSpan Span) : Pattern(Span);
+
+/// <summary>
+/// A single `case PATTERN, PATTERN, ... [where GUARD]:` clause inside a
+/// `switch` body. Not a `Statement` itself — only ever appears inside a
+/// `SwitchStatement`'s `Cases` list. `Body` is not brace-delimited (see
+/// `ParseCaseBody`'s remarks in Parser.cs) — it runs until the next
+/// `case`, `default`, or the enclosing `switch`'s closing `}`.
+/// </summary>
+public sealed record SwitchCase(
+    IReadOnlyList<Pattern> Patterns,
+    Expression? Guard,
+    IReadOnlyList<Statement> Body,
+    SourceSpan Span) : AstNode(Span);
+
+/// <summary>
+/// A `switch` statement, e.g. grammar.md Section 6's own example:
+/// `switch shape { case .circle(let radius): ... case .rectangle(let w,
+/// let h): ... default: ... }`. `DefaultBody` is null when no `default:`
+/// clause is present — the parser doesn't enforce switch exhaustiveness
+/// (whether every `enum` case is covered, or a `default` is required
+/// when they aren't); that's a `Semantics/` question.
+/// </summary>
+public sealed record SwitchStatement(
+    Expression Subject,
+    IReadOnlyList<SwitchCase> Cases,
+    IReadOnlyList<Statement>? DefaultBody,
+    SourceSpan Span) : Statement(Span);
+
+/// <summary>
 /// Placeholder for a statement the parser recognized the start of but
-/// doesn't yet know how to parse (e.g. `switch`, `for`, `guard` —
-/// anything beyond what's listed in Parsing/README.md's current scope).
-/// Rather than crashing or silently dropping content, the parser reports
-/// a diagnostic and produces one of these, carrying the span of what it
+/// doesn't yet know how to parse (e.g. `for`, `guard` — anything beyond
+/// what's listed in Parsing/README.md's current scope). Rather than
+/// crashing or silently dropping content, the parser reports a
+/// diagnostic and produces one of these, carrying the span of what it
 /// skipped, so a file mixing already-supported and not-yet-supported
 /// constructs still parses as far as it can.
 /// </summary>

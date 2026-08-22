@@ -804,14 +804,15 @@ Console.WriteLine("=== Control flow: if/else, while, break, continue ===");
         });
 }
 {
-    // switch/for/guard remain explicitly unsupported — confirms adding
-    // if/while didn't accidentally widen the UnsupportedStatementStarts
-    // gap or otherwise change this recovery contract.
-    var unit = ParseSource("switch x {}\nprint(\"after\")", out var sink);
-    Check("'switch' is still reported as unsupported",
+    // 'for'/'guard' remain explicitly unsupported — confirms adding
+    // if/while/switch didn't accidentally widen the
+    // UnsupportedStatementStarts gap or otherwise change this recovery
+    // contract.
+    var unit = ParseSource("for x in y {}\nprint(\"after\")", out var sink);
+    Check("'for' is still reported as unsupported",
         sink.Diagnostics.Count == 1 && sink.HasErrors == false, // warning, not error
         string.Join("; ", sink.Diagnostics));
-    Check("parser still recovers after an unsupported 'switch'",
+    Check("parser still recovers after an unsupported 'for'",
         unit.Statements is
         [
             UnsupportedStatement,
@@ -873,15 +874,15 @@ Console.WriteLine("=== struct / enum / case declarations ===");
             CaseDeclaration
             {
                 Name: "circle",
-                AssociatedValues: [Parameter { Name: "radius", Type: NamedTypeNode { Name: "Double" } }],
+                AssociatedValues: [AssociatedValue { Label: "radius", Type: NamedTypeNode { Name: "Double" } }],
             },
             CaseDeclaration
             {
                 Name: "rectangle",
                 AssociatedValues:
                 [
-                    Parameter { Name: "width", Type: NamedTypeNode { Name: "Double" } },
-                    Parameter { Name: "height", Type: NamedTypeNode { Name: "Double" } },
+                    AssociatedValue { Label: "width", Type: NamedTypeNode { Name: "Double" } },
+                    AssociatedValue { Label: "height", Type: NamedTypeNode { Name: "Double" } },
                 ],
             },
             CaseDeclaration { Name: "triangle", AssociatedValues: [] },
@@ -895,10 +896,10 @@ Console.WriteLine("=== struct / enum / case declarations ===");
 }
 {
     // Confirms struct/enum/protocol/extension didn't accidentally widen
-    // the unsupported set further: switch/for/guard/actor should all
-    // still be rejected.
-    var unit = ParseSource("switch x {}\nfor y in z {}\nprint(\"after\")", out var sink);
-    Check("both 'switch' and 'for' report exactly one diagnostic each",
+    // the unsupported set further: for/guard/actor should all still be
+    // rejected.
+    var unit = ParseSource("for y in z {}\nactor Counter {}\nprint(\"after\")", out var sink);
+    Check("both 'for' and 'actor' report exactly one diagnostic each",
         sink.Diagnostics.Count == 2, string.Join("; ", sink.Diagnostics));
     Check("parser still recovers to the trailing print statement",
         unit.Statements is
@@ -1580,6 +1581,202 @@ Console.WriteLine("=== String interpolation ===");
     var call = ((ExpressionStatement)unit.Statements[0]).Expression as CallExpression;
     Check("a plain string with no interpolation still parses as StringLiteralExpression",
         call?.Arguments is [StringLiteralExpression { Value: "just plain text" }]);
+}
+
+// ---------------------------------------------------------------------
+// 21. switch statements and case patterns
+// ---------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine("=== switch statements and case patterns ===");
+{
+    // Real bug found while writing the nested-pattern test below:
+    // type-system.md's own canonical Optional<T> definition (Section 3)
+    // uses `case some(T)` / `case none` as real case names — but `some`
+    // lexes as the KwSome keyword (for opaque types `some P`), not
+    // Identifier, so this failed to parse via ParseCaseDeclaration's
+    // plain Expect(Identifier) before ExpectIdentifierLike existed.
+    // This is type-system.md's actual Optional<T> body, verbatim.
+    var unit = ParseSource("enum Optional<T> {\n    case some(T)\n    case none\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var enumDecl = unit.Statements[0] as EnumDeclaration;
+    Check("type-system.md's own Optional<T> definition ('case some(T)') now parses correctly",
+        enumDecl?.Members is
+        [
+            CaseDeclaration { Name: "some", AssociatedValues: [AssociatedValue { Label: null, Type: NamedTypeNode { Name: "T" } }] },
+            CaseDeclaration { Name: "none", AssociatedValues: [] },
+        ]);
+}
+{
+    // Same collision, at the pattern-matching call site: '.some(...)'
+    // and '.none' as patterns, matching against a real Optional value.
+    var unit = ParseSource("switch value {\ncase .some(let x):\n    use(x)\ncase .none:\n    skip()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("'.some(let x)' / '.none' patterns (matching real Optional case names) parse correctly",
+        switchStmt?.Cases is
+        [
+            SwitchCase { Patterns: [EnumCasePattern { CaseName: "some", AssociatedValues: [BindingPattern { Name: "x" }] }] },
+            SwitchCase { Patterns: [EnumCasePattern { CaseName: "none", AssociatedValues: [] }] },
+        ]);
+}
+{
+    // grammar.md Section 6's own switch example, verbatim: enum-case
+    // patterns with associated-value bindings, plus a default clause.
+    var unit = ParseSource(
+        "switch shape {\n" +
+        "case .circle(let radius):\n" +
+        "    describe()\n" +
+        "case .rectangle(let w, let h):\n" +
+        "    describe()\n" +
+        "default:\n" +
+        "    describe()\n" +
+        "}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("grammar.md's own switch example parses correctly",
+        unit.Statements is
+        [
+            SwitchStatement
+            {
+                Subject: IdentifierExpression { Name: "shape" },
+                Cases:
+                [
+                    SwitchCase
+                    {
+                        Patterns: [EnumCasePattern { CaseName: "circle", AssociatedValues: [BindingPattern { Name: "radius" }] }],
+                        Guard: null,
+                    },
+                    SwitchCase
+                    {
+                        Patterns:
+                        [
+                            EnumCasePattern
+                            {
+                                CaseName: "rectangle",
+                                AssociatedValues: [BindingPattern { Name: "w" }, BindingPattern { Name: "h" }],
+                            },
+                        ],
+                    },
+                ],
+                DefaultBody: [ExpressionStatement],
+            },
+        ]);
+}
+{
+    // A bare enum case with no associated values.
+    var unit = ParseSource("switch x {\ncase .none:\n    f()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("bare enum case pattern (no associated values) parses correctly",
+        switchStmt?.Cases is [SwitchCase { Patterns: [EnumCasePattern { CaseName: "none", AssociatedValues: [] }] }]);
+}
+{
+    // Multiple comma-separated value patterns on one case, plus the
+    // wildcard pattern.
+    var unit = ParseSource("switch x {\ncase 1, 2:\n    a()\ncase _:\n    b()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("comma-separated value patterns and wildcard pattern parse correctly",
+        switchStmt?.Cases is
+        [
+            SwitchCase { Patterns: [ExpressionPattern { Expression: IntegerLiteralExpression { Value: 1 } }, ExpressionPattern { Expression: IntegerLiteralExpression { Value: 2 } }] },
+            SwitchCase { Patterns: [WildcardPattern] },
+        ]);
+}
+{
+    // A 'where' guard clause on a case.
+    var unit = ParseSource("switch x {\ncase let n where n > 0:\n    positive()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("'where' guard clause on a case parses correctly",
+        switchStmt?.Cases is
+        [
+            SwitchCase
+            {
+                Patterns: [BindingPattern { Name: "n" }],
+                Guard: BinaryExpression { Operator: BinaryOperator.Greater, Left: IdentifierExpression { Name: "n" } },
+            },
+        ]);
+}
+{
+    // Nested pattern: an enum case pattern as an associated-value slot
+    // of another enum case pattern — falls out for free from ParsePattern
+    // being used recursively for associated-value slots.
+    var unit = ParseSource("switch x {\ncase .some(.circle(let radius)):\n    f()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("nested enum-case pattern ('.some(.circle(let radius))') parses correctly",
+        switchStmt?.Cases is
+        [
+            SwitchCase
+            {
+                Patterns:
+                [
+                    EnumCasePattern
+                    {
+                        CaseName: "some",
+                        AssociatedValues: [EnumCasePattern { CaseName: "circle", AssociatedValues: [BindingPattern { Name: "radius" }] }],
+                    },
+                ],
+            },
+        ]);
+}
+{
+    // A switch with no default clause at all — the parser doesn't
+    // enforce exhaustiveness (that's Semantics/'s job for enum subjects).
+    var unit = ParseSource("switch x {\ncase 1:\n    a()\n}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("switch with no default clause has a null DefaultBody, not an empty list",
+        switchStmt?.DefaultBody is null);
+}
+{
+    // A case body with more than one statement — confirms ParseCaseBody
+    // genuinely stops at the next 'case'/'default'/'}' rather than
+    // needing brace delimiters, and doesn't consume neighboring cases.
+    var unit = ParseSource(
+        "switch x {\n" +
+        "case 1:\n" +
+        "    let a = 1\n" +
+        "    print(\"one\")\n" +
+        "case 2:\n" +
+        "    print(\"two\")\n" +
+        "}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = unit.Statements[0] as SwitchStatement;
+    Check("multi-statement case body parses correctly and doesn't bleed into the next case",
+        switchStmt?.Cases is
+        [
+            SwitchCase
+            {
+                Body:
+                [
+                    BindingStatement { Name: "a" },
+                    ExpressionStatement { Expression: CallExpression { Arguments: [StringLiteralExpression { Value: "one" }] } },
+                ],
+            },
+            SwitchCase
+            {
+                Body: [ExpressionStatement { Expression: CallExpression { Arguments: [StringLiteralExpression { Value: "two" }] } }],
+            },
+        ]);
+}
+{
+    // switch as a statement inside a function body — confirms it
+    // composes with everything else via ParseBlockStatements, the same
+    // way if/while do.
+    var unit = ParseSource(
+        "func describe(shape: Shape) -> String {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius):\n" +
+        "        return \"circle\"\n" +
+        "    default:\n" +
+        "        return \"other\"\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var fn = unit.Statements[0] as FunctionDeclaration;
+    Check("'switch' composes correctly as a statement inside a function body",
+        fn?.Body is [SwitchStatement { Cases: [SwitchCase { Body: [ReturnStatement] }], DefaultBody: [ReturnStatement] }]);
 }
 
 // ---------------------------------------------------------------------

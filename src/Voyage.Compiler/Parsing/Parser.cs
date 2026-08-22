@@ -50,7 +50,7 @@ public sealed class Parser
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
         TokenKind.KwActor,
-        TokenKind.KwGuard, TokenKind.KwSwitch,
+        TokenKind.KwGuard,
         TokenKind.KwFor, TokenKind.KwRepeat,
         TokenKind.KwThrow, TokenKind.KwDo, TokenKind.KwImport,
         TokenKind.KwDefer, TokenKind.KwUsing, TokenKind.KwAtomic,
@@ -136,6 +136,44 @@ public sealed class Parser
         return Current;
     }
 
+    /// <summary>
+    /// Expects an identifier-like name. Accepts a plain `Identifier`, or
+    /// one of voyage-lang's contextual keywords (`some`, `any`, `Self`,
+    /// `Optional`) — reserved only in *type* position, but which need to
+    /// remain usable as ordinary names everywhere else. This turned out
+    /// to matter more broadly than first expected: `Optional` itself
+    /// collides with declaration/type-reference names (`enum
+    /// Optional<T>`, `extension Optional { ... }` — both real,
+    /// plausible things to write, the first being type-system.md's own
+    /// canonical `Optional&lt;T&gt;` definition), not just `some`/`none`
+    /// as case names (`case some(T)`, also from that same definition).
+    /// Used at every "expect a name" call site in this file — function/
+    /// type/parameter/binding/member names — rather than special-cased
+    /// per call site, since the underlying collision is the same
+    /// wherever it shows up. Not a general contextual-keyword *system*
+    /// (the lexer still always produces `KwSome`/`KwAny`/etc. for these
+    /// words; there's no lexer-level context sensitivity) — just a
+    /// uniform, deliberate exception applied at every place a name is
+    /// parsed.
+    /// </summary>
+    private Token ExpectIdentifierLike(string message)
+    {
+        if (IsIdentifierLikeToken(Current.Kind))
+        {
+            return Advance();
+        }
+
+        _diagnostics.Report(new Diagnostic(
+            DiagnosticSeverity.Error,
+            message,
+            SourceSpan.At(Current.Span.Start)));
+        return Current;
+    }
+
+    private static bool IsIdentifierLikeToken(TokenKind kind) =>
+        kind is TokenKind.Identifier or TokenKind.KwSome or TokenKind.KwAny
+            or TokenKind.KwSelfType or TokenKind.KwOptional;
+
     private void SkipNewlines()
     {
         while (Check(TokenKind.Newline))
@@ -216,6 +254,11 @@ public sealed class Parser
             return ParseWhileStatement();
         }
 
+        if (Check(TokenKind.KwSwitch))
+        {
+            return ParseSwitchStatement();
+        }
+
         if (Check(TokenKind.KwBreak))
         {
             return ParseSimpleKeywordStatement(span => new BreakStatement(span));
@@ -274,7 +317,7 @@ public sealed class Parser
         var isMutable = Current.Kind == TokenKind.KwVar;
         Advance(); // consume 'let' / 'var'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a name after 'let'/'var'.");
+        var nameToken = ExpectIdentifierLike("Expected a name after 'let'/'var'.");
         var name = nameToken.Text;
 
         TypeNode? declaredType = null;
@@ -330,7 +373,7 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'func'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a function name after 'func'.");
+        var nameToken = ExpectIdentifierLike("Expected a function name after 'func'.");
         var name = nameToken.Text;
         var genericParameters = ParseGenericParameterList();
 
@@ -379,10 +422,10 @@ public sealed class Parser
         var names = new List<string>();
         if (Match(TokenKind.Colon))
         {
-            names.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            names.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
             while (Match(TokenKind.Comma))
             {
-                names.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+                names.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
             }
         }
         return names;
@@ -397,14 +440,14 @@ public sealed class Parser
     private TypeConstraint ParseTypeConstraint()
     {
         var start = Current.Span.Start;
-        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        var nameToken = ExpectIdentifierLike("Expected a type name.");
         var protocols = new List<string>();
         if (Match(TokenKind.Colon))
         {
-            protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
             while (Match(TokenKind.Amp))
             {
-                protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+                protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
             }
         }
         var end = Current.Span.Start;
@@ -464,7 +507,7 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'struct'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a struct name after 'struct'.");
+        var nameToken = ExpectIdentifierLike("Expected a struct name after 'struct'.");
         var name = nameToken.Text;
         var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
@@ -489,7 +532,7 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'enum'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected an enum name after 'enum'.");
+        var nameToken = ExpectIdentifierLike("Expected an enum name after 'enum'.");
         var name = nameToken.Text;
         var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
@@ -512,7 +555,7 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'protocol'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a protocol name after 'protocol'.");
+        var nameToken = ExpectIdentifierLike("Expected a protocol name after 'protocol'.");
         var name = nameToken.Text;
         var genericParameters = ParseGenericParameterList();
         var inherited = ParseConformanceClause();
@@ -538,7 +581,7 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'extension'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a type name after 'extension'.");
+        var nameToken = ExpectIdentifierLike("Expected a type name after 'extension'.");
         var extendedType = nameToken.Text;
         var genericParameters = ParseGenericParameterList();
         var conformances = ParseConformanceClause();
@@ -563,20 +606,20 @@ public sealed class Parser
         var start = Current.Span.Start;
         Advance(); // consume 'case'
 
-        var nameToken = Expect(TokenKind.Identifier, "Expected a case name after 'case'.");
+        var nameToken = ExpectIdentifierLike("Expected a case name after 'case'.");
         var name = nameToken.Text;
         var end = nameToken.Span.End;
 
-        var associatedValues = new List<Parameter>();
+        var associatedValues = new List<AssociatedValue>();
         if (Check(TokenKind.LParen))
         {
             Advance(); // consume '('
             if (!Check(TokenKind.RParen))
             {
-                associatedValues.Add(ParseParameter());
+                associatedValues.Add(ParseAssociatedValue());
                 while (Match(TokenKind.Comma))
                 {
-                    associatedValues.Add(ParseParameter());
+                    associatedValues.Add(ParseAssociatedValue());
                 }
             }
             var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the case's associated values.");
@@ -585,6 +628,30 @@ public sealed class Parser
 
         ExpectStatementTerminator();
         return new CaseDeclaration(name, associatedValues, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses a single case associated value: `[label:] Type`. Unlike a
+    /// function parameter, the label is entirely optional — `case
+    /// some(T)` (type-system.md's own `Optional&lt;T&gt;`) is a bare,
+    /// unlabeled type, while `case circle(radius: Double)` is labeled.
+    /// Disambiguated the same way as parameter labels: if the current
+    /// token is name-like and immediately followed by `:`, it's a label;
+    /// otherwise what follows is parsed directly as a type.
+    /// </summary>
+    private AssociatedValue ParseAssociatedValue()
+    {
+        var start = Current.Span.Start;
+        string? label = null;
+
+        if (IsIdentifierLikeToken(Current.Kind) && PeekAt(1).Kind == TokenKind.Colon)
+        {
+            label = Advance().Text; // already confirmed identifier-like above
+            Advance(); // consume ':'
+        }
+
+        var type = ParseType();
+        return new AssociatedValue(label, type, new SourceSpan(start, type.Span.End));
     }
 
     /// <summary>
@@ -615,7 +682,7 @@ public sealed class Parser
         }
         else
         {
-            var nameToken = Expect(TokenKind.Identifier, "Expected a parameter name.");
+            var nameToken = ExpectIdentifierLike("Expected a parameter name.");
             name = nameToken.Text;
             externalLabel = name; // Swift's implicit default: same as internal name
         }
@@ -693,10 +760,10 @@ public sealed class Parser
     private TypeNode ParseProtocolConstraintType(SourceLocation start, bool isOpaque)
     {
         Advance(); // consume 'any' / 'some'
-        var protocols = new List<string> { Expect(TokenKind.Identifier, "Expected a protocol name.").Text };
+        var protocols = new List<string> { ExpectIdentifierLike("Expected a protocol name.").Text };
         while (Match(TokenKind.Amp))
         {
-            protocols.Add(Expect(TokenKind.Identifier, "Expected a protocol name.").Text);
+            protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
         }
         var end = Current.Span.Start;
         var span = new SourceSpan(start, end);
@@ -713,7 +780,7 @@ public sealed class Parser
 
     private TypeNode ParseNamedType(SourceLocation start)
     {
-        var nameToken = Expect(TokenKind.Identifier, "Expected a type name.");
+        var nameToken = ExpectIdentifierLike("Expected a type name.");
         var genericArguments = new List<TypeNode>();
         if (Match(TokenKind.Less))
         {
@@ -822,6 +889,161 @@ public sealed class Parser
         var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'while' body.");
 
         return new WhileStatement(condition, body, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `switch` SUBJECT `{` (`case` PATTERN, ... [`where` GUARD]
+    /// `:` STATEMENT* | `default:` STATEMENT*)* `}`. Unlike `if`/`while`
+    /// bodies, individual case bodies are not brace-delimited — each
+    /// runs until the next `case`, `default`, or the switch's own
+    /// closing `}`, per <see cref="ParseCaseBody"/>.
+    /// </summary>
+    private Statement ParseSwitchStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'switch'
+
+        var subject = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'switch' body.");
+
+        var cases = new List<SwitchCase>();
+        List<Statement>? defaultBody = null;
+
+        SkipNewlines();
+        while (!Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            if (Check(TokenKind.KwCase))
+            {
+                cases.Add(ParseSwitchCase());
+            }
+            else if (Check(TokenKind.KwDefault))
+            {
+                Advance(); // consume 'default'
+                Expect(TokenKind.Colon, "Expected ':' after 'default'.");
+                defaultBody = ParseCaseBody();
+            }
+            else
+            {
+                _diagnostics.Report(new Diagnostic(
+                    DiagnosticSeverity.Error,
+                    $"Expected 'case' or 'default' inside a 'switch' body, found '{Current.Text}'.",
+                    SourceSpan.At(Current.Span.Start)));
+                // Recovery: skip to the next case/default/} rather than
+                // aborting the whole switch over one bad token.
+                while (!Check(TokenKind.KwCase) && !Check(TokenKind.KwDefault) &&
+                       !Check(TokenKind.RBrace) && !IsAtEnd)
+                {
+                    Advance();
+                }
+            }
+            SkipNewlines();
+        }
+
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'switch' body.");
+        return new SwitchStatement(subject, cases, defaultBody, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>Parses `case` PATTERN, PATTERN, ... [`where` GUARD] `:` STATEMENT*.</summary>
+    private SwitchCase ParseSwitchCase()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'case'
+
+        var patterns = new List<Pattern> { ParsePattern() };
+        while (Match(TokenKind.Comma))
+        {
+            patterns.Add(ParsePattern());
+        }
+
+        Expression? guard = null;
+        if (Match(TokenKind.KwWhere))
+        {
+            guard = ParseExpression();
+        }
+
+        Expect(TokenKind.Colon, "Expected ':' after the case pattern(s).");
+        var body = ParseCaseBody();
+        var end = Current.Span.Start;
+        return new SwitchCase(patterns, guard, body, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses the statement list that follows a `case ... :` or
+    /// `default:` up to (but not including) the next `case`, `default`,
+    /// or the enclosing `switch`'s closing `}` — deliberately not
+    /// brace-delimited, matching Swift's switch-case shape rather than
+    /// the brace-delimited bodies every other block construct in this
+    /// parser uses.
+    /// </summary>
+    private List<Statement> ParseCaseBody()
+    {
+        var statements = new List<Statement>();
+        SkipNewlines();
+        while (!Check(TokenKind.KwCase) && !Check(TokenKind.KwDefault) &&
+               !Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            statements.Add(ParseStatement());
+            SkipNewlines();
+        }
+        return statements;
+    }
+
+    /// <summary>
+    /// Parses a single case pattern: `_` (wildcard), `let name` (binding),
+    /// `.caseName[(pattern, ...)]` (enum-case pattern, associated-value
+    /// slots reusing this same method recursively), or falls back to an
+    /// ordinary expression (`ExpressionPattern`) for literal/value
+    /// matching (`case 1, 2:`).
+    /// </summary>
+    private Pattern ParsePattern()
+    {
+        var start = Current.Span.Start;
+
+        if (Check(TokenKind.Identifier) && Current.Text == "_")
+        {
+            var token = Advance();
+            return new WildcardPattern(token.Span);
+        }
+
+        if (Check(TokenKind.KwLet))
+        {
+            Advance(); // consume 'let'
+            var nameToken = ExpectIdentifierLike("Expected a name after 'let' in a pattern.");
+            return new BindingPattern(nameToken.Text, new SourceSpan(start, nameToken.Span.End));
+        }
+
+        if (Check(TokenKind.Dot))
+        {
+            return ParseEnumCasePattern(start);
+        }
+
+        var expr = ParseExpression();
+        return new ExpressionPattern(expr, new SourceSpan(start, expr.Span.End));
+    }
+
+    private Pattern ParseEnumCasePattern(SourceLocation start)
+    {
+        Advance(); // consume '.'
+        var caseNameToken = ExpectIdentifierLike("Expected an enum case name after '.'.");
+        var end = caseNameToken.Span.End;
+
+        var associatedValues = new List<Pattern>();
+        if (Check(TokenKind.LParen))
+        {
+            Advance(); // consume '('
+            if (!Check(TokenKind.RParen))
+            {
+                associatedValues.Add(ParsePattern());
+                while (Match(TokenKind.Comma))
+                {
+                    associatedValues.Add(ParsePattern());
+                }
+            }
+            var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the case pattern's associated values.");
+            end = closeParen.Span.End;
+        }
+
+        return new EnumCasePattern(caseNameToken.Text, associatedValues, new SourceSpan(start, end));
     }
 
     /// <summary>
@@ -1074,7 +1296,7 @@ public sealed class Parser
     {
         var start = target.Span.Start;
         Advance(); // consume '.'
-        var memberToken = Expect(TokenKind.Identifier, "Expected a member name after '.'.");
+        var memberToken = ExpectIdentifierLike("Expected a member name after '.'.");
         return new MemberAccessExpression(target, memberToken.Text, new SourceSpan(start, memberToken.Span.End));
     }
 

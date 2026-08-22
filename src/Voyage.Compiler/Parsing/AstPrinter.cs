@@ -153,6 +153,11 @@ public static class AstPrinter
                 Write(p.Type, sb, indent + 1);
                 break;
 
+            case AssociatedValue av:
+                Line($"AssociatedValue label='{av.Label ?? "(none)"}' @ {av.Span}");
+                Write(av.Type, sb, indent + 1);
+                break;
+
             case TypeNode t:
                 Line($"TypeNode '{FormatType(t)}' @ {t.Span}");
                 break;
@@ -183,6 +188,74 @@ public static class AstPrinter
                 Line($"WhileStatement @ {whileStmt.Span}");
                 WriteLabeled("condition", whileStmt.Condition, sb, indent + 1);
                 WriteStatementList("body", whileStmt.Body, sb, indent + 1);
+                break;
+
+            case SwitchStatement switchStmt:
+                Line($"SwitchStatement @ {switchStmt.Span}");
+                WriteLabeled("subject", switchStmt.Subject, sb, indent + 1);
+                if (switchStmt.Cases.Count == 0)
+                {
+                    Line2("cases: (none)", sb, indent + 1);
+                }
+                else
+                {
+                    Line2("cases:", sb, indent + 1);
+                    foreach (var c in switchStmt.Cases)
+                    {
+                        Write(c, sb, indent + 2);
+                    }
+                }
+                if (switchStmt.DefaultBody is not null)
+                {
+                    WriteStatementList("default", switchStmt.DefaultBody, sb, indent + 1);
+                }
+                else
+                {
+                    Line2("default: (none)", sb, indent + 1);
+                }
+                break;
+
+            case SwitchCase switchCase:
+                Line($"SwitchCase @ {switchCase.Span}");
+                Line2("patterns:", sb, indent + 1);
+                foreach (var p in switchCase.Patterns)
+                {
+                    Write(p, sb, indent + 2);
+                }
+                if (switchCase.Guard is not null)
+                {
+                    WriteLabeled("where", switchCase.Guard, sb, indent + 1);
+                }
+                WriteStatementList("body", switchCase.Body, sb, indent + 1);
+                break;
+
+            case WildcardPattern wild:
+                Line($"WildcardPattern '_' @ {wild.Span}");
+                break;
+
+            case BindingPattern binding:
+                Line($"BindingPattern 'let {binding.Name}' @ {binding.Span}");
+                break;
+
+            case EnumCasePattern enumCase:
+                Line($"EnumCasePattern '.{enumCase.CaseName}' @ {enumCase.Span}");
+                if (enumCase.AssociatedValues.Count == 0)
+                {
+                    Line2("associatedValues: (none)", sb, indent + 1);
+                }
+                else
+                {
+                    Line2("associatedValues:", sb, indent + 1);
+                    foreach (var p in enumCase.AssociatedValues)
+                    {
+                        Write(p, sb, indent + 2);
+                    }
+                }
+                break;
+
+            case ExpressionPattern exprPattern:
+                Line($"ExpressionPattern @ {exprPattern.Span}");
+                Write(exprPattern.Expression, sb, indent + 1);
                 break;
 
             case BreakStatement brk:
