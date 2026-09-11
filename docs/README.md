@@ -54,6 +54,7 @@ way the first time.
 | [0008](design-notes/ADR-0008-atomic-block-full-syntax.md) | Full `atomic{}` rule set: flat/no-op nesting, synchronous-call constraints, whole-compilation-unit transitive-await detection, `@syncSafe` for external-assembly exemptions |
 | [0009](design-notes/ADR-0009-tracing-gc-not-arc.md) | Reference-type memory management uses the CLR's tracing GC, not Swift's ARC |
 | [0010](design-notes/ADR-0010-compiler-architecture.md) | `Voyage.Compiler` architecture: hand-written recursive descent (matching Swift's own `lib/Parse/`), five-phase pipeline (`Lexing/` → `Parsing/` → `Semantics/` → `Lowering/` → `Diagnostics/`), and where implementation should start |
+| [0011](design-notes/ADR-0011-minimal-pipeline-scope.md) | Build a full lexer→parser→semantics→lowering→codegen slice now on a deliberately reduced language subset, instead of finishing `Parsing/` first; `Semantics/`/`Lowering/` stay C#; minimal `CodeGen/` target is `System.Reflection.Emit` |
 
 ### A note on ADR-0006 and ADR-0008/ADR-0009
 
@@ -83,7 +84,9 @@ and new ADR should cross-reference each other.
   `@testable import`/re-export syntax, or a package/project manifest
   format — all tracked as deferred or out-of-scope-for-language-design in
   the relevant spec file's open items.
-- No ADRs yet exist for `Voyage.Compiler`'s deeper internals — `CodeGen/`
-  architecture and generic specialization/monomorphization strategy are
-  explicitly deferred by ADR-0010 to their own future ADRs once more
-  implementation-level groundwork exists.
+- `CodeGen/`'s full architecture is still mostly undecided — ADR-0011
+  only fixes the minimal-pipeline target (`System.Reflection.Emit`) needed
+  to get a barebones program running end-to-end. Generic
+  specialization/monomorphization strategy remains explicitly deferred to
+  its own future ADR, since generics instantiation is outside ADR-0011's
+  minimal language subset.

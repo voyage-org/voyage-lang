@@ -8,21 +8,35 @@ namespace Voyage.Compiler.Parsing;
 /// (no parser generator). Converts a token stream (from `Lexing/`) into
 /// an AST.
 ///
-/// SCOPE — this is intentionally the *first milestone only*, per
-/// Parsing/README.md: enough grammar to parse `print("Hello, Voyage.")`
-/// and nothing more. Concretely, this parser currently supports:
+/// SCOPE — this parser's grammar coverage grows incrementally; see
+/// src/Voyage.Compiler/Parsing/README.md for the authoritative current
+/// scope and what's next. As of this revision, supported:
 ///   - Top-level expression statements
+///   - `let`/`var` binding statements with an initializer (no explicit
+///     `: Type` annotation yet — recognized and reported, not silently
+///     dropped)
 ///   - Call expressions: `callee(arg, arg, ...)`
+///   - Binary/unary operators per grammar.md's "Operator Precedence and
+///     Associativity" table (||, &&, comparison, ??, +/-, */%, unary
+///     -/!) — range operators (`..&lt;`, `...`) are recognized by the
+///     lexer but not yet wired into this precedence ladder, since no
+///     grammar construct (`for`-`in`) consumes them yet
 ///   - Primary expressions: identifiers, string/integer/float/boolean/nil
 ///     literals, and parenthesized expressions `(expr)`
+///   - `func` declarations: `func NAME(NAME: Type, ...) [-&gt; Type] { ... }`
+///     — bodies are just nested statement lists (so `return`, nested
+///     `func`s, etc. all just work), but generic parameters (`&lt;T&gt;`/
+///     `where`) and Swift-style external parameter labels are not yet
+///     parsed (see FunctionDeclaration/Parameter/TypeNode remarks)
+///   - `return` statements, with or without a value
 ///
 /// Explicitly NOT yet supported (each reported as a diagnostic + an
 /// `UnsupportedStatement`/`ErrorExpression` recovery node, not a crash):
-///   - Any declaration (`let`, `var`, `func`, `struct`, `enum`,
-///     `protocol`, `extension`, `actor`, ...)
-///   - Any control flow (`if`, `switch`, `for`, `while`, ...)
+///   - Any other declaration (`struct`, `enum`, `protocol`, `extension`,
+///     `actor`, ...)
+///   - Any other control flow (`if`, `switch`, `for`, `while`, ...)
 ///   - String interpolation (`"\(...)"`)
-///   - Binary/unary operators, member access (`.`), subscripting
+///   - Member access (`.`), subscripting, ternary, `as`-casting
 /// Every one of these is a real next-milestone item, not an oversight —
 /// growing this parser outward from here is the expected path.
 /// </summary>
@@ -35,12 +49,9 @@ public sealed class Parser
     // a much more useful message than a generic parse error.
     private static readonly HashSet<TokenKind> UnsupportedStatementStarts =
     [
-        TokenKind.KwLet, TokenKind.KwVar,
-        TokenKind.KwFunc, TokenKind.KwStruct, TokenKind.KwEnum,
-        TokenKind.KwProtocol, TokenKind.KwExtension, TokenKind.KwActor,
-        TokenKind.KwIf, TokenKind.KwGuard, TokenKind.KwSwitch,
-        TokenKind.KwFor, TokenKind.KwWhile, TokenKind.KwRepeat,
-        TokenKind.KwReturn, TokenKind.KwBreak, TokenKind.KwContinue,
+        TokenKind.KwActor,
+        TokenKind.KwGuard,
+        TokenKind.KwFor, TokenKind.KwRepeat,
         TokenKind.KwThrow, TokenKind.KwDo, TokenKind.KwImport,
         TokenKind.KwDefer, TokenKind.KwUsing, TokenKind.KwAtomic,
     ];
@@ -67,13 +78,22 @@ public sealed class Parser
 
     private Token Current => _tokens[_pos];
 
+    private bool IsAtEnd => Current.Kind == TokenKind.EndOfFile;
+
+    /// <summary>
+    /// Looks ahead without consuming. Used by <see cref="ParseParameter"/>
+    /// to distinguish `name: Type` from `externalLabel name: Type` (or
+    /// `_ name: Type`) — the only place in this parser that currently
+    /// needs more than one token of lookahead. If this stops being the
+    /// only caller, that's fine; it was deliberately removed once before
+    /// (as genuinely dead code) and re-added only once a real use
+    /// existed, rather than kept "just in case."
+    /// </summary>
     private Token PeekAt(int offset)
     {
         var i = _pos + offset;
         return i < _tokens.Count ? _tokens[i] : _tokens[^1]; // ^1 is EndOfFile
     }
-
-    private bool IsAtEnd => Current.Kind == TokenKind.EndOfFile;
 
     private Token Advance()
     {
@@ -116,6 +136,44 @@ public sealed class Parser
         return Current;
     }
 
+    /// <summary>
+    /// Expects an identifier-like name. Accepts a plain `Identifier`, or
+    /// one of voyage-lang's contextual keywords (`some`, `any`, `Self`,
+    /// `Optional`) — reserved only in *type* position, but which need to
+    /// remain usable as ordinary names everywhere else. This turned out
+    /// to matter more broadly than first expected: `Optional` itself
+    /// collides with declaration/type-reference names (`enum
+    /// Optional<T>`, `extension Optional { ... }` — both real,
+    /// plausible things to write, the first being type-system.md's own
+    /// canonical `Optional&lt;T&gt;` definition), not just `some`/`none`
+    /// as case names (`case some(T)`, also from that same definition).
+    /// Used at every "expect a name" call site in this file — function/
+    /// type/parameter/binding/member names — rather than special-cased
+    /// per call site, since the underlying collision is the same
+    /// wherever it shows up. Not a general contextual-keyword *system*
+    /// (the lexer still always produces `KwSome`/`KwAny`/etc. for these
+    /// words; there's no lexer-level context sensitivity) — just a
+    /// uniform, deliberate exception applied at every place a name is
+    /// parsed.
+    /// </summary>
+    private Token ExpectIdentifierLike(string message)
+    {
+        if (IsIdentifierLikeToken(Current.Kind))
+        {
+            return Advance();
+        }
+
+        _diagnostics.Report(new Diagnostic(
+            DiagnosticSeverity.Error,
+            message,
+            SourceSpan.At(Current.Span.Start)));
+        return Current;
+    }
+
+    private static bool IsIdentifierLikeToken(TokenKind kind) =>
+        kind is TokenKind.Identifier or TokenKind.KwSome or TokenKind.KwAny
+            or TokenKind.KwSelfType or TokenKind.KwOptional;
+
     private void SkipNewlines()
     {
         while (Check(TokenKind.Newline))
@@ -146,6 +204,71 @@ public sealed class Parser
 
     private Statement ParseStatement()
     {
+        if (Check(TokenKind.KwLet) || Check(TokenKind.KwVar))
+        {
+            return ParseBindingStatement();
+        }
+
+        if (Check(TokenKind.KwFunc))
+        {
+            return ParseFunctionDeclaration();
+        }
+
+        if (Check(TokenKind.KwStruct))
+        {
+            return ParseStructDeclaration();
+        }
+
+        if (Check(TokenKind.KwEnum))
+        {
+            return ParseEnumDeclaration();
+        }
+
+        if (Check(TokenKind.KwCase))
+        {
+            return ParseCaseDeclaration();
+        }
+
+        if (Check(TokenKind.KwProtocol))
+        {
+            return ParseProtocolDeclaration();
+        }
+
+        if (Check(TokenKind.KwExtension))
+        {
+            return ParseExtensionDeclaration();
+        }
+
+        if (Check(TokenKind.KwReturn))
+        {
+            return ParseReturnStatement();
+        }
+
+        if (Check(TokenKind.KwIf))
+        {
+            return ParseIfStatement();
+        }
+
+        if (Check(TokenKind.KwWhile))
+        {
+            return ParseWhileStatement();
+        }
+
+        if (Check(TokenKind.KwSwitch))
+        {
+            return ParseSwitchStatement();
+        }
+
+        if (Check(TokenKind.KwBreak))
+        {
+            return ParseSimpleKeywordStatement(span => new BreakStatement(span));
+        }
+
+        if (Check(TokenKind.KwContinue))
+        {
+            return ParseSimpleKeywordStatement(span => new ContinueStatement(span));
+        }
+
         if (UnsupportedStatementStarts.Contains(Current.Kind))
         {
             return ParseUnsupportedStatement();
@@ -153,11 +276,804 @@ public sealed class Parser
 
         var start = Current.Span.Start;
         var expr = ParseExpression();
-        var end = Current.Span.Start; // position right after the expression
 
-        // A statement ends at a newline, EOF, or an optional semicolon
-        // (grammar.md: semicolons are an optional same-line separator).
-        if (!Check(TokenKind.Newline) && !IsAtEnd && !Check(TokenKind.Semicolon))
+        if (TryGetAssignmentOperator(Current.Kind, out var assignOp))
+        {
+            Advance(); // consume the assignment operator
+            var value = ParseExpression();
+            var assignEnd = Current.Span.Start;
+            ExpectStatementTerminator();
+            return new AssignmentStatement(expr, assignOp, value, new SourceSpan(start, assignEnd));
+        }
+
+        var end = Current.Span.Start; // position right after the expression
+        ExpectStatementTerminator();
+        return new ExpressionStatement(expr, new SourceSpan(start, end));
+    }
+
+    private static bool TryGetAssignmentOperator(TokenKind kind, out AssignmentOperator op)
+    {
+        switch (kind)
+        {
+            case TokenKind.Equal: op = AssignmentOperator.Assign; return true;
+            case TokenKind.PlusEqual: op = AssignmentOperator.AddAssign; return true;
+            case TokenKind.MinusEqual: op = AssignmentOperator.SubtractAssign; return true;
+            case TokenKind.StarEqual: op = AssignmentOperator.MultiplyAssign; return true;
+            case TokenKind.SlashEqual: op = AssignmentOperator.DivideAssign; return true;
+            default: op = default; return false;
+        }
+    }
+
+    /// <summary>
+    /// Parses `let`/`var` NAME [: Type] [= expr]. At least one of the
+    /// type annotation or the initializer must be present — a bare
+    /// `let x` with neither has no way to determine its type and is
+    /// treated as an unsupported statement, same recovery contract as
+    /// every other not-yet-supported construct.
+    /// </summary>
+    private Statement ParseBindingStatement()
+    {
+        var start = Current.Span.Start;
+        var isMutable = Current.Kind == TokenKind.KwVar;
+        Advance(); // consume 'let' / 'var'
+
+        var nameToken = ExpectIdentifierLike("Expected a name after 'let'/'var'.");
+        var name = nameToken.Text;
+
+        TypeNode? declaredType = null;
+        if (Match(TokenKind.Colon))
+        {
+            declaredType = ParseType();
+        }
+
+        Expression? initializer = null;
+        if (Match(TokenKind.Equal))
+        {
+            initializer = ParseExpression();
+        }
+
+        if (declaredType is null && initializer is null)
+        {
+            _diagnostics.Report(new Diagnostic(
+                DiagnosticSeverity.Error,
+                "Expected ':' or '=' — a binding needs either a type annotation " +
+                "or an initializer (or both) so its type can be determined.",
+                SourceSpan.At(Current.Span.Start)));
+
+            while (!Check(TokenKind.Newline) && !IsAtEnd)
+            {
+                Advance();
+            }
+            return new UnsupportedStatement(new SourceSpan(start, Current.Span.Start));
+        }
+
+        var end = Current.Span.Start;
+        ExpectStatementTerminator();
+        return new BindingStatement(isMutable, name, declaredType, initializer, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses `func` NAME `(` [PARAM (`,` PARAM)*] `)` [`->` Type] `{` STATEMENT* `}`.
+    /// Generic parameters (`&lt;T&gt;`/`where`) are not yet recognized — see
+    /// FunctionDeclaration's remarks and Parsing/README.md. A missing
+    /// return type is fine (implicit Void); a single-expression body is
+    /// just parsed as one ExpressionStatement, with implicit-return
+    /// lowering left to a later phase per ADR-0005.
+    /// </summary>
+    /// <summary>
+    /// Parses `func` NAME [`&lt;` GENERICS `&gt;`] `(` PARAM, ... `)`
+    /// [`->` Type] [`where` CONSTRAINTS] [`{` STATEMENT* `}`]. The body
+    /// is optional — its absence (`Body == null`) means a protocol
+    /// requirement (`func draw() -> String` with nothing after it); its
+    /// presence, even as `{}`, means a real (possibly empty)
+    /// implementation.
+    /// </summary>
+    private Statement ParseFunctionDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'func'
+
+        var nameToken = ExpectIdentifierLike("Expected a function name after 'func'.");
+        var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
+
+        Expect(TokenKind.LParen, "Expected '(' to begin the parameter list.");
+        var parameters = new List<Parameter>();
+        if (!Check(TokenKind.RParen))
+        {
+            parameters.Add(ParseParameter());
+            while (Match(TokenKind.Comma))
+            {
+                parameters.Add(ParseParameter());
+            }
+        }
+        Expect(TokenKind.RParen, "Expected ')' to close the parameter list.");
+
+        TypeNode? returnType = null;
+        if (Match(TokenKind.Arrow))
+        {
+            returnType = ParseType();
+        }
+
+        var whereConstraints = ParseWhereClause();
+
+        if (Check(TokenKind.LBrace))
+        {
+            Advance(); // consume '{'
+            var body = ParseBlockStatements();
+            var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the function body.");
+            return new FunctionDeclaration(name, genericParameters, parameters, returnType, whereConstraints, body, new SourceSpan(start, closeBrace.Span.End));
+        }
+
+        // No '{' — this is a bodyless protocol requirement. Still needs a
+        // proper statement terminator, same as any other statement.
+        var end = Current.Span.Start;
+        ExpectStatementTerminator();
+        return new FunctionDeclaration(name, genericParameters, parameters, returnType, whereConstraints, null, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses an optional `: A, B, ...` conformance/inheritance clause,
+    /// shared by `struct`/`enum`/`protocol`/`extension`. Returns an empty
+    /// list when no `:` is present.
+    /// </summary>
+    private List<string> ParseConformanceClause()
+    {
+        var names = new List<string>();
+        if (Match(TokenKind.Colon))
+        {
+            names.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
+            while (Match(TokenKind.Comma))
+            {
+                names.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
+            }
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// Parses a single `TypeConstraint`: NAME [`:` PROTOCOL (`&amp;` PROTOCOL)*].
+    /// Shared shape for both an inline `&lt;T: P&gt;` generic-parameter entry
+    /// and a `where T: P` clause entry — see `TypeConstraint`'s remarks in
+    /// Ast.cs for why one node/parse method covers both.
+    /// </summary>
+    private TypeConstraint ParseTypeConstraint()
+    {
+        var start = Current.Span.Start;
+        var nameToken = ExpectIdentifierLike("Expected a type name.");
+        var protocols = new List<string>();
+        if (Match(TokenKind.Colon))
+        {
+            protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
+            while (Match(TokenKind.Amp))
+            {
+                protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
+            }
+        }
+        var end = Current.Span.Start;
+        return new TypeConstraint(nameToken.Text, protocols, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses an optional `&lt;T, U: Protocol, ...&gt;` generic-parameter
+    /// list. Returns an empty list when no `&lt;` is present. Since `&lt;`/
+    /// `&gt;` are also the comparison operators, this only works safely
+    /// because every call site is in a declaration position (right after
+    /// a name, before `(`/`{`) rather than inside expression parsing —
+    /// there's no real ambiguity to resolve at those call sites.
+    /// </summary>
+    private List<TypeConstraint> ParseGenericParameterList()
+    {
+        var result = new List<TypeConstraint>();
+        if (Match(TokenKind.Less))
+        {
+            result.Add(ParseTypeConstraint());
+            while (Match(TokenKind.Comma))
+            {
+                result.Add(ParseTypeConstraint());
+            }
+            Expect(TokenKind.Greater, "Expected '>' to close the generic parameter list.");
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Parses an optional trailing `where T: Protocol, U: Protocol, ...`
+    /// clause. Returns an empty list when no `where` is present.
+    /// </summary>
+    private List<TypeConstraint> ParseWhereClause()
+    {
+        var result = new List<TypeConstraint>();
+        if (Match(TokenKind.KwWhere))
+        {
+            result.Add(ParseTypeConstraint());
+            while (Match(TokenKind.Comma))
+            {
+                result.Add(ParseTypeConstraint());
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Parses `struct` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Members reuse
+    /// `ParseBlockStatements` directly — `var`/`let` properties and
+    /// `func` methods are both just statements already, so no new
+    /// member-parsing infrastructure was needed.
+    /// </summary>
+    private Statement ParseStructDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'struct'
+
+        var nameToken = ExpectIdentifierLike("Expected a struct name after 'struct'.");
+        var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
+        var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the struct body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the struct body.");
+
+        return new StructDeclaration(name, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `enum` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `ParseStructDeclaration` — see `EnumDeclaration`'s remarks for
+    /// why the parser doesn't restrict members to only `case`
+    /// declarations.
+    /// </summary>
+    private Statement ParseEnumDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'enum'
+
+        var nameToken = ExpectIdentifierLike("Expected an enum name after 'enum'.");
+        var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
+        var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the enum body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the enum body.");
+
+        return new EnumDeclaration(name, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `protocol` NAME [`&lt;` GENERICS `&gt;`] [`: ` INHERITANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `struct`/`enum` — see `ProtocolDeclaration`'s remarks.
+    /// </summary>
+    private Statement ParseProtocolDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'protocol'
+
+        var nameToken = ExpectIdentifierLike("Expected a protocol name after 'protocol'.");
+        var name = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
+        var inherited = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the protocol body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the protocol body.");
+
+        return new ProtocolDeclaration(name, genericParameters, inherited, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `extension` NAME [`&lt;` GENERICS `&gt;`] [`: ` CONFORMANCE]
+    /// [`where` CONSTRAINTS] `{` MEMBER* `}`. Same block-statement reuse
+    /// as `struct`/`enum`/`protocol` — see `ExtensionDeclaration`'s
+    /// remarks, including the real Swift pattern of a `where` clause with
+    /// no `&lt;...&gt;` list (`extension Array where Element: Equatable`,
+    /// constraining an already-generic extended type).
+    /// </summary>
+    private Statement ParseExtensionDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'extension'
+
+        var nameToken = ExpectIdentifierLike("Expected a type name after 'extension'.");
+        var extendedType = nameToken.Text;
+        var genericParameters = ParseGenericParameterList();
+        var conformances = ParseConformanceClause();
+        var whereConstraints = ParseWhereClause();
+
+        Expect(TokenKind.LBrace, "Expected '{' to begin the extension body.");
+        var members = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to close the extension body.");
+
+        return new ExtensionDeclaration(extendedType, genericParameters, conformances, whereConstraints, members, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `case` NAME [`(` PARAM, ... `)`]. The associated-value list
+    /// reuses `ParseParameter` directly, since `case circle(radius:
+    /// Double)`'s parenthesized list has the exact same shape as a
+    /// function parameter list. Swift's comma-separated multi-case
+    /// shorthand (`case a, b, c`) is not yet supported.
+    /// </summary>
+    private Statement ParseCaseDeclaration()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'case'
+
+        var nameToken = ExpectIdentifierLike("Expected a case name after 'case'.");
+        var name = nameToken.Text;
+        var end = nameToken.Span.End;
+
+        var associatedValues = new List<AssociatedValue>();
+        if (Check(TokenKind.LParen))
+        {
+            Advance(); // consume '('
+            if (!Check(TokenKind.RParen))
+            {
+                associatedValues.Add(ParseAssociatedValue());
+                while (Match(TokenKind.Comma))
+                {
+                    associatedValues.Add(ParseAssociatedValue());
+                }
+            }
+            var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the case's associated values.");
+            end = closeParen.Span.End;
+        }
+
+        ExpectStatementTerminator();
+        return new CaseDeclaration(name, associatedValues, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses a single case associated value: `[label:] Type`. Unlike a
+    /// function parameter, the label is entirely optional — `case
+    /// some(T)` (type-system.md's own `Optional&lt;T&gt;`) is a bare,
+    /// unlabeled type, while `case circle(radius: Double)` is labeled.
+    /// Disambiguated the same way as parameter labels: if the current
+    /// token is name-like and immediately followed by `:`, it's a label;
+    /// otherwise what follows is parsed directly as a type.
+    /// </summary>
+    private AssociatedValue ParseAssociatedValue()
+    {
+        var start = Current.Span.Start;
+        string? label = null;
+
+        if (IsIdentifierLikeToken(Current.Kind) && PeekAt(1).Kind == TokenKind.Colon)
+        {
+            label = Advance().Text; // already confirmed identifier-like above
+            Advance(); // consume ':'
+        }
+
+        var type = ParseType();
+        return new AssociatedValue(label, type, new SourceSpan(start, type.Span.End));
+    }
+
+    /// <summary>
+    /// Parses a single parameter, in any of three shapes: `name: Type`
+    /// (external label defaults to the same as the internal name, per
+    /// Swift's implicit-same-label default — applied here so downstream
+    /// phases never re-derive it), `_ name: Type` (external label
+    /// suppressed — `ExternalLabel` is null), or `external name: Type`
+    /// (an explicit, distinct external label). Disambiguated via one
+    /// token of lookahead: if the token after the first identifier is
+    /// itself an identifier (rather than `:`), the first identifier was
+    /// a label, not the parameter's name.
+    /// </summary>
+    private Parameter ParseParameter()
+    {
+        var start = Current.Span.Start;
+        string? externalLabel;
+        string name;
+
+        if (Check(TokenKind.Identifier) && PeekAt(1).Kind == TokenKind.Identifier)
+        {
+            // Two identifiers in a row: the first is an external label
+            // (either a real label, or '_' to suppress one) and the
+            // second is the internal name.
+            var labelToken = Advance();
+            externalLabel = labelToken.Text == "_" ? null : labelToken.Text;
+            name = Advance().Text;
+        }
+        else
+        {
+            var nameToken = ExpectIdentifierLike("Expected a parameter name.");
+            name = nameToken.Text;
+            externalLabel = name; // Swift's implicit default: same as internal name
+        }
+
+        Expect(TokenKind.Colon, "Expected ':' after parameter name.");
+        var type = ParseType();
+        return new Parameter(externalLabel, name, type, new SourceSpan(start, type.Span.End));
+    }
+
+    /// <summary>
+    /// Parses a type expression. Dispatches on the leading token to one
+    /// of: array sugar (`[T]`), function types (`(T1, T2) -> R`),
+    /// existentials (`any P`), opaque types (`some P`), `Self`, or a
+    /// named type reference with optional generic arguments (`Name`,
+    /// `Name&lt;Arg&gt;`). Any form may carry a trailing `?` for
+    /// `Optional&lt;T&gt;` sugar — applied uniformly via
+    /// <see cref="ApplyTrailingOptional"/> rather than duplicated in
+    /// each case, since `?` can trail any of them.
+    /// </summary>
+    private TypeNode ParseType()
+    {
+        var start = Current.Span.Start;
+        TypeNode type = Current.Kind switch
+        {
+            TokenKind.LBracket => ParseArrayType(start),
+            TokenKind.LParen => ParseFunctionType(start),
+            TokenKind.KwAny => ParseProtocolConstraintType(start, isOpaque: false),
+            TokenKind.KwSome => ParseProtocolConstraintType(start, isOpaque: true),
+            TokenKind.KwSelfType => ParseSelfType(),
+            _ => ParseNamedType(start),
+        };
+        return ApplyTrailingOptional(type, start);
+    }
+
+    private TypeNode ApplyTrailingOptional(TypeNode type, SourceLocation start)
+    {
+        if (Check(TokenKind.Question))
+        {
+            var question = Advance();
+            return type with { IsOptional = true, Span = new SourceSpan(start, question.Span.End) };
+        }
+        return type;
+    }
+
+    private TypeNode ParseArrayType(SourceLocation start)
+    {
+        Advance(); // consume '['
+        var element = ParseType();
+        var closeBracket = Expect(TokenKind.RBracket, "Expected ']' to close the array type.");
+        return new ArrayTypeNode(element, false, new SourceSpan(start, closeBracket.Span.End));
+    }
+
+    /// <summary>Parses `(T1, T2, ...) -> R`. A bare parenthesized type
+    /// for grouping (`(Int)` alone, no arrow) is not a supported form —
+    /// every `(` in type position is expected to introduce a function
+    /// type, so `->` is always required after the parameter list.</summary>
+    private TypeNode ParseFunctionType(SourceLocation start)
+    {
+        Advance(); // consume '('
+        var parameterTypes = new List<TypeNode>();
+        if (!Check(TokenKind.RParen))
+        {
+            parameterTypes.Add(ParseType());
+            while (Match(TokenKind.Comma))
+            {
+                parameterTypes.Add(ParseType());
+            }
+        }
+        Expect(TokenKind.RParen, "Expected ')' to close the function type's parameter list.");
+        Expect(TokenKind.Arrow, "Expected '->' in function type.");
+        var returnType = ParseType();
+        return new FunctionTypeNode(parameterTypes, returnType, false, new SourceSpan(start, returnType.Span.End));
+    }
+
+    private TypeNode ParseProtocolConstraintType(SourceLocation start, bool isOpaque)
+    {
+        Advance(); // consume 'any' / 'some'
+        var protocols = new List<string> { ExpectIdentifierLike("Expected a protocol name.").Text };
+        while (Match(TokenKind.Amp))
+        {
+            protocols.Add(ExpectIdentifierLike("Expected a protocol name.").Text);
+        }
+        var end = Current.Span.Start;
+        var span = new SourceSpan(start, end);
+        return isOpaque
+            ? new OpaqueTypeNode(protocols, false, span)
+            : new ExistentialTypeNode(protocols, false, span);
+    }
+
+    private TypeNode ParseSelfType()
+    {
+        var token = Advance(); // consume 'Self'
+        return new SelfTypeNode(false, token.Span);
+    }
+
+    private TypeNode ParseNamedType(SourceLocation start)
+    {
+        var nameToken = ExpectIdentifierLike("Expected a type name.");
+        var genericArguments = new List<TypeNode>();
+        if (Match(TokenKind.Less))
+        {
+            genericArguments.Add(ParseType());
+            while (Match(TokenKind.Comma))
+            {
+                genericArguments.Add(ParseType());
+            }
+            Expect(TokenKind.Greater, "Expected '>' to close the generic argument list.");
+        }
+        var end = Current.Span.Start;
+        return new NamedTypeNode(nameToken.Text, genericArguments, false, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses the statements inside a `{ ... }` block, stopping at the
+    /// closing brace (left for the caller to Expect, so the caller's
+    /// span calculation can include it). Shared by function bodies now;
+    /// intended to be shared by if/while/for/etc. bodies later.
+    /// </summary>
+    private List<Statement> ParseBlockStatements()
+    {
+        var statements = new List<Statement>();
+        SkipNewlines();
+        while (!Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            statements.Add(ParseStatement());
+            SkipNewlines();
+        }
+        return statements;
+    }
+
+    /// <summary>
+    /// Parses `return` [expr]. A bare `return` (no value) is recognized
+    /// when the next token can't start an expression on the same
+    /// statement — i.e. it's immediately a newline, semicolon, closing
+    /// brace, or EOF.
+    /// </summary>
+    private Statement ParseReturnStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'return'
+
+        Expression? value = null;
+        if (!Check(TokenKind.Newline) && !Check(TokenKind.Semicolon) &&
+            !Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            value = ParseExpression();
+        }
+
+        var end = Current.Span.Start;
+        ExpectStatementTerminator();
+        return new ReturnStatement(value, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses `if` COND `{` STATEMENT* `}` [`else` (`{` STATEMENT* `}` | `if` ...)].
+    /// `if let`/`if case` conditional binding forms (grammar.md Section 6)
+    /// are not yet recognized — only a plain boolean-valued condition
+    /// expression. `else` must directly follow the `if` body's closing
+    /// `}` with no newline in between (matching common Swift style);
+    /// `else` on its own line is not yet supported.
+    /// </summary>
+    private Statement ParseIfStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'if'
+
+        var condition = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'if' body.");
+        var thenBranch = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'if' body.");
+        var end = closeBrace.Span.End;
+
+        List<Statement>? elseBranch = null;
+        if (Check(TokenKind.KwElse))
+        {
+            Advance(); // consume 'else'
+            if (Check(TokenKind.KwIf))
+            {
+                var nestedIf = ParseIfStatement();
+                elseBranch = [nestedIf];
+                end = nestedIf.Span.End;
+            }
+            else
+            {
+                Expect(TokenKind.LBrace, "Expected '{' to begin the 'else' body.");
+                elseBranch = ParseBlockStatements();
+                var elseCloseBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'else' body.");
+                end = elseCloseBrace.Span.End;
+            }
+        }
+
+        return new IfStatement(condition, thenBranch, elseBranch, new SourceSpan(start, end));
+    }
+
+    /// <summary>Parses `while` COND `{` STATEMENT* `}`.</summary>
+    private Statement ParseWhileStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'while'
+
+        var condition = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'while' body.");
+        var body = ParseBlockStatements();
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'while' body.");
+
+        return new WhileStatement(condition, body, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>
+    /// Parses `switch` SUBJECT `{` (`case` PATTERN, ... [`where` GUARD]
+    /// `:` STATEMENT* | `default:` STATEMENT*)* `}`. Unlike `if`/`while`
+    /// bodies, individual case bodies are not brace-delimited — each
+    /// runs until the next `case`, `default`, or the switch's own
+    /// closing `}`, per <see cref="ParseCaseBody"/>.
+    /// </summary>
+    private Statement ParseSwitchStatement()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'switch'
+
+        var subject = ParseExpression();
+        Expect(TokenKind.LBrace, "Expected '{' to begin the 'switch' body.");
+
+        var cases = new List<SwitchCase>();
+        List<Statement>? defaultBody = null;
+
+        SkipNewlines();
+        while (!Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            if (Check(TokenKind.KwCase))
+            {
+                cases.Add(ParseSwitchCase());
+            }
+            else if (Check(TokenKind.KwDefault))
+            {
+                Advance(); // consume 'default'
+                Expect(TokenKind.Colon, "Expected ':' after 'default'.");
+                defaultBody = ParseCaseBody();
+            }
+            else
+            {
+                _diagnostics.Report(new Diagnostic(
+                    DiagnosticSeverity.Error,
+                    $"Expected 'case' or 'default' inside a 'switch' body, found '{Current.Text}'.",
+                    SourceSpan.At(Current.Span.Start)));
+                // Recovery: skip to the next case/default/} rather than
+                // aborting the whole switch over one bad token.
+                while (!Check(TokenKind.KwCase) && !Check(TokenKind.KwDefault) &&
+                       !Check(TokenKind.RBrace) && !IsAtEnd)
+                {
+                    Advance();
+                }
+            }
+            SkipNewlines();
+        }
+
+        var closeBrace = Expect(TokenKind.RBrace, "Expected '}' to end the 'switch' body.");
+        return new SwitchStatement(subject, cases, defaultBody, new SourceSpan(start, closeBrace.Span.End));
+    }
+
+    /// <summary>Parses `case` PATTERN, PATTERN, ... [`where` GUARD] `:` STATEMENT*.</summary>
+    private SwitchCase ParseSwitchCase()
+    {
+        var start = Current.Span.Start;
+        Advance(); // consume 'case'
+
+        var patterns = new List<Pattern> { ParsePattern() };
+        while (Match(TokenKind.Comma))
+        {
+            patterns.Add(ParsePattern());
+        }
+
+        Expression? guard = null;
+        if (Match(TokenKind.KwWhere))
+        {
+            guard = ParseExpression();
+        }
+
+        Expect(TokenKind.Colon, "Expected ':' after the case pattern(s).");
+        var body = ParseCaseBody();
+        var end = Current.Span.Start;
+        return new SwitchCase(patterns, guard, body, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Parses the statement list that follows a `case ... :` or
+    /// `default:` up to (but not including) the next `case`, `default`,
+    /// or the enclosing `switch`'s closing `}` — deliberately not
+    /// brace-delimited, matching Swift's switch-case shape rather than
+    /// the brace-delimited bodies every other block construct in this
+    /// parser uses.
+    /// </summary>
+    private List<Statement> ParseCaseBody()
+    {
+        var statements = new List<Statement>();
+        SkipNewlines();
+        while (!Check(TokenKind.KwCase) && !Check(TokenKind.KwDefault) &&
+               !Check(TokenKind.RBrace) && !IsAtEnd)
+        {
+            statements.Add(ParseStatement());
+            SkipNewlines();
+        }
+        return statements;
+    }
+
+    /// <summary>
+    /// Parses a single case pattern: `_` (wildcard), `let name` (binding),
+    /// `.caseName[(pattern, ...)]` (enum-case pattern, associated-value
+    /// slots reusing this same method recursively), or falls back to an
+    /// ordinary expression (`ExpressionPattern`) for literal/value
+    /// matching (`case 1, 2:`).
+    /// </summary>
+    private Pattern ParsePattern()
+    {
+        var start = Current.Span.Start;
+
+        if (Check(TokenKind.Identifier) && Current.Text == "_")
+        {
+            var token = Advance();
+            return new WildcardPattern(token.Span);
+        }
+
+        if (Check(TokenKind.KwLet))
+        {
+            Advance(); // consume 'let'
+            var nameToken = ExpectIdentifierLike("Expected a name after 'let' in a pattern.");
+            return new BindingPattern(nameToken.Text, new SourceSpan(start, nameToken.Span.End));
+        }
+
+        if (Check(TokenKind.Dot))
+        {
+            return ParseEnumCasePattern(start);
+        }
+
+        var expr = ParseExpression();
+        return new ExpressionPattern(expr, new SourceSpan(start, expr.Span.End));
+    }
+
+    private Pattern ParseEnumCasePattern(SourceLocation start)
+    {
+        Advance(); // consume '.'
+        var caseNameToken = ExpectIdentifierLike("Expected an enum case name after '.'.");
+        var end = caseNameToken.Span.End;
+
+        var associatedValues = new List<Pattern>();
+        if (Check(TokenKind.LParen))
+        {
+            Advance(); // consume '('
+            if (!Check(TokenKind.RParen))
+            {
+                associatedValues.Add(ParsePattern());
+                while (Match(TokenKind.Comma))
+                {
+                    associatedValues.Add(ParsePattern());
+                }
+            }
+            var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the case pattern's associated values.");
+            end = closeParen.Span.End;
+        }
+
+        return new EnumCasePattern(caseNameToken.Text, associatedValues, new SourceSpan(start, end));
+    }
+
+    /// <summary>
+    /// Shared implementation for bare, argument-less keyword statements
+    /// (`break`, `continue`). Labeled variants (`break outerLoop`) aren't
+    /// supported yet — voyage-lang has no loop labels yet — so this
+    /// always consumes exactly one token. Caller is expected to have
+    /// already checked which keyword is current via `Check(...)`.
+    /// </summary>
+    private Statement ParseSimpleKeywordStatement(Func<SourceSpan, Statement> build)
+    {
+        var token = Advance();
+        var span = token.Span;
+        ExpectStatementTerminator();
+        return build(span);
+    }
+
+    /// <summary>
+    /// A statement ends at a newline, EOF, an optional semicolon
+    /// (grammar.md: semicolons are an optional same-line separator), or
+    /// a closing brace (so the last statement in a `{ ... }` block —
+    /// e.g. a compact single-expression function body — doesn't need a
+    /// trailing newline before `}`). Shared by every statement kind so
+    /// the terminator contract stays uniform as more statement kinds
+    /// are added.
+    /// </summary>
+    private void ExpectStatementTerminator()
+    {
+        if (!Check(TokenKind.Newline) && !IsAtEnd &&
+            !Check(TokenKind.Semicolon) && !Check(TokenKind.RBrace))
         {
             _diagnostics.Report(new Diagnostic(
                 DiagnosticSeverity.Error,
@@ -165,8 +1081,6 @@ public sealed class Parser
                 SourceSpan.At(Current.Span.Start)));
         }
         Match(TokenKind.Semicolon);
-
-        return new ExpressionStatement(expr, new SourceSpan(start, end));
     }
 
     /// <summary>
@@ -196,26 +1110,165 @@ public sealed class Parser
     }
 
     // ----------------------------------------------------------------
-    // Expressions
+    // Expressions — precedence ladder
     // ----------------------------------------------------------------
+    // Mirrors grammar.md's "Operator Precedence and Associativity"
+    // table, itself adapted from Swift's real precedencegroup chain
+    // (stdlib/public/core/Policy.swift). Each level parses everything
+    // at higher precedence first, then loops/recurses for its own
+    // operator(s) — the standard hand-written-recursive-descent pattern
+    // for expression precedence (ADR-0010: no parser generator, no
+    // separate precedence-table-driven Pratt parser either — this ladder
+    // is the straightforward hand-written equivalent).
 
-    private Expression ParseExpression() => ParsePostfix(ParsePrimary());
+    private Expression ParseExpression() => ParseNilCoalescing();
+
+    /// <summary>`??` — right-associative, per grammar.md.</summary>
+    private Expression ParseNilCoalescing()
+    {
+        var left = ParseLogicalOr();
+        if (Match(TokenKind.QuestionQuestion))
+        {
+            var right = ParseNilCoalescing(); // recurse (not loop) for right-associativity
+            return new BinaryExpression(left, BinaryOperator.NilCoalescing, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalOr()
+    {
+        var left = ParseLogicalAnd();
+        while (Match(TokenKind.PipePipe))
+        {
+            var right = ParseLogicalAnd();
+            left = new BinaryExpression(left, BinaryOperator.LogicalOr, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalAnd()
+    {
+        var left = ParseComparison();
+        while (Match(TokenKind.AmpAmp))
+        {
+            var right = ParseComparison();
+            left = new BinaryExpression(left, BinaryOperator.LogicalAnd, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
 
     /// <summary>
-    /// Handles postfix constructs applied to a primary expression. Only
-    /// call expressions are implemented this milestone; member access
-    /// (`.`) and subscripting (`[...]`) are explicit next-milestone
-    /// items, not silently ignored — they simply aren't reached here
-    /// yet, and a `.`/`[` after a primary expression will surface as an
-    /// "expected end of statement" diagnostic from the caller instead of
-    /// being parsed, which is an accurate (if not yet friendly) signal
-    /// that the construct isn't supported yet.
+    /// Comparison operators are non-chaining in voyage-lang, matching
+    /// Swift (`a &lt; b &lt; c` is not valid) — parsed with `if`, not
+    /// `while`, so at most one comparison operator applies per level.
+    /// </summary>
+    private Expression ParseComparison()
+    {
+        var left = ParseAdditive();
+        if (TryGetComparisonOperator(Current.Kind, out var op))
+        {
+            Advance();
+            var right = ParseAdditive();
+            return new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseAdditive()
+    {
+        var left = ParseMultiplicative();
+        while (Check(TokenKind.Plus) || Check(TokenKind.Minus))
+        {
+            var op = Current.Kind == TokenKind.Plus ? BinaryOperator.Add : BinaryOperator.Subtract;
+            Advance();
+            var right = ParseMultiplicative();
+            left = new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    private Expression ParseMultiplicative()
+    {
+        var left = ParseUnary();
+        while (Check(TokenKind.Star) || Check(TokenKind.Slash) || Check(TokenKind.Percent))
+        {
+            var op = Current.Kind switch
+            {
+                TokenKind.Star => BinaryOperator.Multiply,
+                TokenKind.Slash => BinaryOperator.Divide,
+                _ => BinaryOperator.Modulo,
+            };
+            Advance();
+            var right = ParseUnary();
+            left = new BinaryExpression(left, op, right,
+                new SourceSpan(left.Span.Start, right.Span.End));
+        }
+        return left;
+    }
+
+    /// <summary>
+    /// Unary `-` (negation) and `!` (logical not), binding tighter than
+    /// every binary operator above. Postfix forms (calls) bind tighter
+    /// still — see <see cref="ParsePostfix"/>.
+    /// </summary>
+    private Expression ParseUnary()
+    {
+        if (Check(TokenKind.Minus) || Check(TokenKind.Bang))
+        {
+            var start = Current.Span.Start;
+            var op = Current.Kind == TokenKind.Minus ? UnaryOperator.Negate : UnaryOperator.LogicalNot;
+            Advance();
+            var operand = ParseUnary(); // allows stacking, e.g. `!!flag`, `--x` (as double negation)
+            return new UnaryExpression(op, operand, new SourceSpan(start, operand.Span.End));
+        }
+        return ParsePostfix(ParsePrimary());
+    }
+
+    private static bool TryGetComparisonOperator(TokenKind kind, out BinaryOperator op)
+    {
+        switch (kind)
+        {
+            case TokenKind.EqualEqual: op = BinaryOperator.Equal; return true;
+            case TokenKind.BangEqual: op = BinaryOperator.NotEqual; return true;
+            case TokenKind.Less: op = BinaryOperator.Less; return true;
+            case TokenKind.LessEqual: op = BinaryOperator.LessEqual; return true;
+            case TokenKind.Greater: op = BinaryOperator.Greater; return true;
+            case TokenKind.GreaterEqual: op = BinaryOperator.GreaterEqual; return true;
+            default: op = default; return false;
+        }
+    }
+
+    /// <summary>
+    /// Handles postfix constructs applied to a primary expression: call
+    /// expressions (`(...)`), member access (`.name`), and subscripting
+    /// (`[...]`), all of which can chain and interleave — `a.b[0].c()`
+    /// parses as `Call(MemberAccess(Subscript(MemberAccess(a, b), 0), c))`.
     /// </summary>
     private Expression ParsePostfix(Expression expr)
     {
-        while (Check(TokenKind.LParen))
+        while (true)
         {
-            expr = ParseCallExpression(expr);
+            if (Check(TokenKind.LParen))
+            {
+                expr = ParseCallExpression(expr);
+            }
+            else if (Check(TokenKind.Dot))
+            {
+                expr = ParseMemberAccessExpression(expr);
+            }
+            else if (Check(TokenKind.LBracket))
+            {
+                expr = ParseSubscriptExpression(expr);
+            }
+            else
+            {
+                break;
+            }
         }
         return expr;
     }
@@ -237,6 +1290,33 @@ public sealed class Parser
 
         var closeParen = Expect(TokenKind.RParen, "Expected ')' to close the argument list.");
         return new CallExpression(callee, arguments, new SourceSpan(start, closeParen.Span.End));
+    }
+
+    private MemberAccessExpression ParseMemberAccessExpression(Expression target)
+    {
+        var start = target.Span.Start;
+        Advance(); // consume '.'
+        var memberToken = ExpectIdentifierLike("Expected a member name after '.'.");
+        return new MemberAccessExpression(target, memberToken.Text, new SourceSpan(start, memberToken.Span.End));
+    }
+
+    private SubscriptExpression ParseSubscriptExpression(Expression target)
+    {
+        var start = target.Span.Start;
+        Advance(); // consume '['
+
+        var arguments = new List<Expression>();
+        if (!Check(TokenKind.RBracket))
+        {
+            arguments.Add(ParseExpression());
+            while (Match(TokenKind.Comma))
+            {
+                arguments.Add(ParseExpression());
+            }
+        }
+
+        var closeBracket = Expect(TokenKind.RBracket, "Expected ']' to close the subscript.");
+        return new SubscriptExpression(target, arguments, new SourceSpan(start, closeBracket.Span.End));
     }
 
     private Expression ParsePrimary()
@@ -269,11 +1349,15 @@ public sealed class Parser
                 Advance();
                 return new NilLiteralExpression(token.Span);
 
+            case TokenKind.KwSelfValue:
+                Advance();
+                return new SelfExpression(token.Span);
+
             case TokenKind.LParen:
                 return ParseParenthesizedExpression();
 
             case TokenKind.InterpolationStringStart:
-                return ParseUnsupportedInterpolatedString();
+                return ParseInterpolatedString();
 
             default:
                 _diagnostics.Report(new Diagnostic(
@@ -300,37 +1384,56 @@ public sealed class Parser
     }
 
     /// <summary>
-    /// String interpolation parsing is explicitly out of scope for this
-    /// milestone (grammar.md Section 10 defines it; this parser doesn't
-    /// implement it yet). Rather than mis-parsing the interpolation's
-    /// structural tokens as something else, this reports a clear
-    /// diagnostic and skips to the matching InterpolationStringEnd.
+    /// Parses an interpolated string, e.g. `"Hello, \(name)!"`. The
+    /// lexer has already done the hard part (tracking paren depth so a
+    /// nested call like `\(f(x, y))` doesn't prematurely close the
+    /// interpolation — see `Lexing/Lexer.cs`); the parser just consumes
+    /// the alternating text/expression token sequence
+    /// (`InterpolationStringStart` [expr `InterpolationStringMiddle`
+    /// expr ...] `InterpolationStringEnd`) and calls `ParseExpression`
+    /// normally for each embedded expression.
     /// </summary>
-    private Expression ParseUnsupportedInterpolatedString()
+    private Expression ParseInterpolatedString()
     {
         var start = Current.Span.Start;
-        _diagnostics.Report(new Diagnostic(
-            DiagnosticSeverity.Error,
-            "String interpolation is not yet supported by this parser milestone " +
-            "(see src/Voyage.Compiler/Parsing/README.md).",
-            SourceSpan.At(start)));
+        var segments = new List<InterpolatedStringSegment>();
 
-        Advance(); // consume InterpolationStringStart
-        var depth = 1;
-        while (depth > 0 && !IsAtEnd)
+        var startToken = Advance(); // consume InterpolationStringStart
+        segments.Add(new InterpolatedStringTextSegment((string)startToken.LiteralValue!, startToken.Span));
+
+        while (true)
         {
-            switch (Current.Kind)
+            var exprStart = Current.Span.Start;
+            var expr = ParseExpression();
+            segments.Add(new InterpolatedStringExpressionSegment(expr, new SourceSpan(exprStart, Current.Span.Start)));
+
+            if (Check(TokenKind.InterpolationStringMiddle))
             {
-                case TokenKind.InterpolationStringStart:
-                    depth++;
-                    break;
-                case TokenKind.InterpolationStringEnd:
-                    depth--;
-                    break;
+                var middleToken = Advance();
+                segments.Add(new InterpolatedStringTextSegment((string)middleToken.LiteralValue!, middleToken.Span));
+                continue; // another interpolation follows
             }
-            Advance();
+
+            if (Check(TokenKind.InterpolationStringEnd))
+            {
+                var endToken = Advance();
+                segments.Add(new InterpolatedStringTextSegment((string)endToken.LiteralValue!, endToken.Span));
+                break;
+            }
+
+            // The lexer's InterpolationString* token sequence guarantees
+            // one of the two cases above follows every embedded
+            // expression for well-formed input; this is a defensive
+            // guard against malformed/unexpected token streams, not a
+            // path well-formed source should ever reach.
+            _diagnostics.Report(new Diagnostic(
+                DiagnosticSeverity.Error,
+                "Expected the string to continue or close after an interpolated expression.",
+                SourceSpan.At(Current.Span.Start)));
+            break;
         }
 
-        return new ErrorExpression(new SourceSpan(start, Current.Span.Start));
+        var end = Current.Span.Start;
+        return new InterpolatedStringExpression(segments, new SourceSpan(start, end));
     }
 }

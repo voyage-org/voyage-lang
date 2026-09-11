@@ -34,6 +34,42 @@ var y = 20           // mutable
 let z: Int = 30      // explicit type annotation
 ```
 
+**Parser implementation note:** `Voyage.Compiler/Parsing/`'s current
+milestone requires an initializer (`let x = 10`, not bare `let x`) and
+does not yet parse the optional `: Type` annotation shown in `let z: Int
+= 30` above — both are real, spec'd grammar, just not yet implemented in
+the parser. See `src/Voyage.Compiler/Parsing/README.md` for current
+scope.
+
+## Operator Precedence and Associativity
+
+Adapted directly from Swift's real precedence-group chain (verified
+against `stdlib/public/core/Policy.swift` in `swiftlang/swift` rather
+than invented), restricted to the subset of operators voyage-lang
+currently defines. Low to high:
+
+| Precedence (low → high) | Operators | Associativity |
+|---|---|---|
+| Logical disjunction | `\|\|` | left |
+| Logical conjunction | `&&` | left |
+| Comparison | `==`, `!=`, `<`, `<=`, `>`, `>=` | none (non-chaining, matching Swift — `a < b < c` is not valid) |
+| Nil-coalescing | `??` | right |
+| Range formation | `..<`, `...` | none (not yet used by any grammar construct — parsed once `for`-`in` exists) |
+| Addition | `+`, `-` (binary) | left |
+| Multiplication | `*`, `/`, `%` | left |
+
+Unary `!` (logical not) and unary `-` (negation) bind tighter than every
+binary operator above, applied prefix. Call expressions and other postfix
+forms bind tighter still.
+
+Swift's fuller chain also has `AssignmentPrecedence`, `FunctionArrowPrecedence`,
+`TernaryPrecedence`, and `CastingPrecedence` slotted in around this
+subset; voyage-lang doesn't yet define a ternary operator or an `as`-cast
+*expression* form (only `as`/`as?`/`as!` for typed-throws-adjacent
+casting contexts elsewhere in the grammar), so those precedence groups
+aren't needed yet. This table grows as those constructs are added, rather
+than being decided speculatively now.
+
 ## 3. Functions
 
 Full keyword `func` (not shortened) — matches Swift, deliberately diverges
