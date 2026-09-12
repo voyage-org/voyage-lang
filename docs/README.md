@@ -55,6 +55,7 @@ way the first time.
 | [0009](design-notes/ADR-0009-tracing-gc-not-arc.md) | Reference-type memory management uses the CLR's tracing GC, not Swift's ARC |
 | [0010](design-notes/ADR-0010-compiler-architecture.md) | `Voyage.Compiler` architecture: hand-written recursive descent (matching Swift's own `lib/Parse/`), five-phase pipeline (`Lexing/` → `Parsing/` → `Semantics/` → `Lowering/` → `Diagnostics/`), and where implementation should start |
 | [0011](design-notes/ADR-0011-minimal-pipeline-scope.md) | Build a full lexer→parser→semantics→lowering→codegen slice now on a deliberately reduced language subset, instead of finishing `Parsing/` first; `Semantics/`/`Lowering/` stay C#; minimal `CodeGen/` target is `System.Reflection.Emit` |
+| [0012](design-notes/ADR-0012-codegen-minimal-subset-emission-strategy.md) | `CodeGen/` targets `PersistedAssemblyBuilder` for real runnable output (verified working on the installed SDK); every `enum` lowers to a CLR struct with an integer tag and one field per case/slot (no union-style overlap, since the CLR rejects overlapping a reference field with a value field); resolves `memory-model.md`'s open `enum` lowering item |
 
 ### A note on ADR-0006 and ADR-0008/ADR-0009
 
@@ -84,9 +85,13 @@ and new ADR should cross-reference each other.
   `@testable import`/re-export syntax, or a package/project manifest
   format — all tracked as deferred or out-of-scope-for-language-design in
   the relevant spec file's open items.
-- `CodeGen/`'s full architecture is still mostly undecided — ADR-0011
-  only fixes the minimal-pipeline target (`System.Reflection.Emit`) needed
-  to get a barebones program running end-to-end. Generic
-  specialization/monomorphization strategy remains explicitly deferred to
-  its own future ADR, since generics instantiation is outside ADR-0011's
-  minimal language subset.
+- `CodeGen/`'s full architecture is still partially undecided — ADR-0012
+  fixes the emission target (`PersistedAssemblyBuilder`, for real runnable
+  output), enum CLR representation, and the struct/function emission
+  approach for ADR-0011's minimal subset. Generic specialization/
+  monomorphization strategy remains explicitly deferred to its own future
+  ADR, since generics instantiation is outside ADR-0011's minimal
+  language subset. ADR-0012 also surfaced a `Semantics/` gap it doesn't
+  resolve: there's currently no way to bind an enum-case *construction*
+  expression (only pattern matching against an already-typed value) —
+  see ADR-0012's Consequences for detail.

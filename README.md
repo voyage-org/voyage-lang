@@ -135,7 +135,7 @@ why, if you're wondering.
 
 ## Roadmap
 
-- [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 11 ADRs
+- [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 12 ADRs
 - [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
 - [x] Parser first milestone → `samples/hello.voy` round-trips to an AST dump (`src/Voyage.Compiler/Parsing/`), 67/67 checks passing across Lexing/ + Parsing/
 - [x] Parser: `let`/`var` bindings, binary/unary operators with full precedence table (`grammar.md`'s "Operator Precedence and Associativity", verified against Swift's real `precedencegroup` chain) — 91/91 checks passing
@@ -154,7 +154,7 @@ why, if you're wondering.
 
 - [x] Semantics/: name resolution and type checking for the ADR-0011 minimal subset — unlabeled calls, `let`/`var`, `if`/`while`/`break`/`continue`/`return`, stored-property-only `struct`/`enum`, string interpolation, `switch`/pattern matching over enums (`src/Voyage.Compiler/Semantics/`) — 276/276 checks passing across Lexing/ + Parsing/ + Semantics/
 - [x] Lowering/: implicit-return injection (ADR-0005) and switch/pattern-match desugaring into `BoundIf` chains — transforms the bound tree in place rather than a separate IR hierarchy (`src/Voyage.Compiler/Lowering/`) — 313/313 checks passing across Lexing/ + Parsing/ + Semantics/ + Lowering/
-- [ ] CodeGen/: needs its own ADR first (enum CLR representation, in-process vs. persisted-assembly emission), then IR → CIL via `System.Reflection.Emit`, first runnable `.voy` program
+- [ ] CodeGen/: architecture decided (ADR-0012 — `PersistedAssemblyBuilder` for real runnable output, enum-as-CLR-struct representation, direct bound-tree walk), implementation not yet started; first runnable `.voy` program is the payoff milestone
 - [ ] Broaden the minimal subset: labeled call arguments, `for`-in, generics instantiation, attributes, declaration modifiers, `associatedtype`, computed properties, array literals, `throws`/`try`/`catch`
 - [ ] `actor`/`task{}`/`atomic{}` semantics (ADR-0002/0006/0008) — deliberately last, per ADR-0011, as the hardest remaining language feature
 - [ ] `voyage` CLI: `build`, `run`, `repl`

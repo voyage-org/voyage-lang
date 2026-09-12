@@ -32,10 +32,14 @@ decision *easier* to implement rather than harder.
   underlying data — multiple bindings can point at the same instance.
   Lowers directly to a CLR reference type (heap-allocated,
   GC-tracked object).
-- **`enum`** follows whichever kind its associated data implies at the
-  storage level: an `enum` with no associated values or only value-typed
-  associated values behaves as a value type; this needs a precise
-  case-by-case lowering rule, tracked as an open item below.
+- **`enum`** is always a **value type**, regardless of what its
+  associated values' types are (ADR-0012) — the same principle already
+  established above for a `struct` holding a reference-typed field: a
+  field being a reference type doesn't make the *containing* type a
+  reference type. Lowers to a CLR `struct` with an integer tag plus one
+  field per case/associated-value-slot (ADR-0012's Decision 2 has the
+  full layout rationale, including why a space-efficient union-style
+  layout isn't used for now).
 
 ```voyage
 struct Point {
@@ -204,9 +208,6 @@ no equivalent performance rationale under a tracing GC — the CLR's own
 
 ## Open Items for Next Pass
 
-- [ ] `enum` value-type/reference-type lowering rule needs a precise,
-      case-by-case specification (Section 1) rather than the informal
-      description given here.
 - [ ] `using` block scoping interaction with `async`/`await` and `actor`
       isolation (Section 3) — does a `using` binding inside an `async`
       function correctly dispose across suspension points? Needs explicit
