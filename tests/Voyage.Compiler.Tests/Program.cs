@@ -1,6 +1,8 @@
 using Voyage.Compiler.Diagnostics;
 using Voyage.Compiler.Lexing;
+using Voyage.Compiler.Lowering;
 using Voyage.Compiler.Parsing;
+using Voyage.Compiler.Semantics;
 
 var failures = 0;
 var passes = 0;
@@ -1777,6 +1779,356 @@ Console.WriteLine("=== switch statements and case patterns ===");
     var fn = unit.Statements[0] as FunctionDeclaration;
     Check("'switch' composes correctly as a statement inside a function body",
         fn?.Body is [SwitchStatement { Cases: [SwitchCase { Body: [ReturnStatement] }], DefaultBody: [ReturnStatement] }]);
+}
+
+// ---------------------------------------------------------------------
+// Semantics/ — ADR-0011 minimal pipeline scope
+// ---------------------------------------------------------------------
+
+BoundCompilationUnit BindSource(string source, out InMemoryDiagnosticSink sink)
+{
+    var unit = ParseSource(source, out var parseSink);
+    Check("no parse diagnostics for semantics test input", parseSink.Diagnostics.Count == 0, string.Join("; ", parseSink.Diagnostics));
+    sink = new InMemoryDiagnosticSink();
+    return SemanticAnalyzer.Analyze(unit, sink);
+}
+
+{
+    // hello.voy itself — the actual sample this whole minimal pipeline
+    // exists to eventually run. Confirms the built-in `print` signature
+    // and top-level statement binding both work together.
+    var bound = BindSource("print(\"Hello, Voyage.\")", out var sink);
+    Check("hello.voy: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("hello.voy: binds to one top-level call statement",
+        bound.TopLevelStatements is [BoundExpressionStatement { Expression: BoundCall { Function.Name: "print" } }]);
+}
+
+{
+    // A function calling another function declared *later* in the file
+    // — the concrete forward-reference case DeclarationBinder's two-pass
+    // split exists for.
+    var bound = BindSource(
+        "func a() -> Int { return b() }\n" +
+        "func b() -> Int { return 42 }", out var sink);
+    Check("forward reference: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("forward reference: both functions bound", bound.Functions.Count == 2);
+}
+
+{
+    // Arithmetic type-checking: matching numeric types succeed, and a
+    // real type mismatch (Int + Bool) is caught with ErrorType rather
+    // than silently accepted or crashing.
+    var bound = BindSource("func add(a: Int, b: Int) -> Int { return a + b }", out var sink);
+    Check("arithmetic: well-typed function has no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var body = bound.Functions[0].Body;
+    Check("arithmetic: 'a + b' binds with Int result type",
+        body is [BoundReturn { Value: BoundBinary { Operator: BinaryOperator.Add, Type: PrimitiveType { Name: "Int" } } }]);
+}
+
+{
+    var unit = ParseSource("func bad() -> Int { return 1 + true }", out var parseSink);
+    Check("type mismatch: parses fine (Semantics/'s job to catch it)", parseSink.Diagnostics.Count == 0);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("type mismatch: 'Int + Bool' is reported as a diagnostic", sink.Diagnostics.Count > 0);
+}
+
+{
+    // let/var, if/while, break/continue — the imperative core of the
+    // minimal subset, all composing inside one function body.
+    var bound = BindSource(
+        "func countdown(n: Int) -> Int {\n" +
+        "    var i = n\n" +
+        "    while i > 0 {\n" +
+        "        if i == 5 {\n" +
+        "            break\n" +
+        "        }\n" +
+        "        i = i - 1\n" +
+        "    }\n" +
+        "    return i\n" +
+        "}", out var sink);
+    Check("imperative core: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+}
+
+{
+    // break/continue outside a loop is caught, not silently accepted.
+    var unit = ParseSource("func f() { break }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("'break' outside a loop is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // Struct construction (implicit positional memberwise init) and
+    // stored-property read via member access.
+    var bound = BindSource(
+        "struct Point {\n" +
+        "    var x: Int\n" +
+        "    var y: Int\n" +
+        "}\n" +
+        "func magnitude(p: Point) -> Int {\n" +
+        "    return p.x + p.y\n" +
+        "}\n" +
+        "let origin = Point(0, 0)", out var sink);
+    Check("struct: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("struct: construction binds as BoundStructConstruction",
+        bound.TopLevelStatements is [BoundVariableDeclaration { Initializer: BoundStructConstruction { Struct.Name: "Point" } }]);
+    Check("struct: property access binds to the right PropertySymbol",
+        bound.Functions[0].Body is [BoundReturn { Value: BoundBinary { Left: BoundPropertyAccess { Property.Name: "x" } } }]);
+}
+
+{
+    // Wrong arity/type on struct construction is caught.
+    var unit = ParseSource(
+        "struct Point { var x: Int\n var y: Int }\n" +
+        "let bad = Point(1)", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("struct: wrong argument count is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // enum + switch/pattern matching, including a binding pattern
+    // extracting an associated value.
+    var bound = BindSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case square(side: Double)\n" +
+        "}\n" +
+        "func area(shape: Shape) -> Double {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius):\n" +
+        "        return radius\n" +
+        "    case .square(let side):\n" +
+        "        return side\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("enum/switch: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = bound.Functions[0].Body[0] as BoundSwitch;
+    Check("enum/switch: subject binds with EnumType",
+        switchStmt?.Subject.Type is EnumType { Symbol.Name: "Shape" });
+    Check("enum/switch: case pattern resolves to the right EnumCaseSymbol",
+        switchStmt?.Cases[0].Patterns[0] is BoundEnumCasePattern { Case.Name: "circle" });
+}
+
+{
+    // Unknown enum case in a pattern is caught rather than silently
+    // matching nothing.
+    var unit = ParseSource(
+        "enum Shape { case circle(radius: Double) }\n" +
+        "func f(s: Shape) -> Double {\n" +
+        "    switch s {\n" +
+        "    case .triangle(let x):\n" +
+        "        return x\n" +
+        "    }\n" +
+        "}", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("unknown enum case in pattern is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // String interpolation type-checks its embedded expressions.
+    var bound = BindSource(
+        "func greet(name: String) -> String {\n" +
+        "    return \"Hello, \\(name)!\"\n" +
+        "}", out var sink);
+    Check("interpolation: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+}
+
+{
+    // Undeclared name is caught with a clear diagnostic, not a crash.
+    var unit = ParseSource("func f() -> Int { return undeclaredName }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("undeclared identifier is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // Deferred-feature diagnostics: a bare `for`-in (UnsupportedStatement
+    // from Parsing/) is reported by Semantics/ too, rather than
+    // Semantics/ crashing on a node kind it's never seen.
+    var unit = ParseSource("func f() { for x in y { } }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("an unparseable construct reaching Semantics/ is diagnosed, not a crash", sink.Diagnostics.Count > 0);
+}
+
+// ---------------------------------------------------------------------
+// Lowering/ — implicit-return injection and switch/pattern desugaring
+// ---------------------------------------------------------------------
+
+BoundCompilationUnit LowerSource(string source, out InMemoryDiagnosticSink sink)
+{
+    var bound = BindSource(source, out var bindSink);
+    Check("no semantic diagnostics for lowering test input", bindSink.Diagnostics.Count == 0, string.Join("; ", bindSink.Diagnostics));
+    sink = new InMemoryDiagnosticSink();
+    return new Lowerer(sink).Lower(bound);
+}
+
+{
+    // hello.voy through the full pipeline so far — nothing here needs
+    // lowering (no switch, no implicit-return-eligible function), so
+    // this mainly confirms Lowerer doesn't disturb what doesn't need it.
+    var lowered = LowerSource("print(\"Hello, Voyage.\")", out var sink);
+    Check("hello.voy: no lowering diagnostics", sink.Diagnostics.Count == 0);
+    Check("hello.voy: top-level call statement passes through unchanged",
+        lowered.TopLevelStatements is [BoundExpressionStatement { Expression: BoundCall { Function.Name: "print" } }]);
+}
+
+{
+    // Implicit-return injection (ADR-0005): a non-Void function whose
+    // entire body is one bare expression gets that expression wrapped
+    // in an explicit BoundReturn.
+    var lowered = LowerSource("func greet() -> String { \"hi\" }", out var sink);
+    Check("implicit return: no diagnostics", sink.Diagnostics.Count == 0);
+    Check("implicit return: bare expression body becomes an explicit BoundReturn",
+        lowered.Functions[0].Body is [BoundReturn { Value: BoundStringLiteral { Value: "hi" } }]);
+}
+
+{
+    // The same single-expression-body shape on a Void function is left
+    // alone — it's a statement evaluated for effect, not a value to
+    // hand back.
+    var lowered = LowerSource("func f() { print(\"hi\") }", out var sink);
+    Check("Void function: single expression statement is not converted to a return",
+        lowered.Functions[0].Body is [BoundExpressionStatement]);
+}
+
+{
+    // Core switch desugaring: two enum cases, no default. Confirms the
+    // exact BoundIf-chain shape BuildCaseChain is documented to produce.
+    var lowered = LowerSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case square(side: Double)\n" +
+        "}\n" +
+        "func area(shape: Shape) -> Double {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius):\n" +
+        "        return radius\n" +
+        "    case .square(let side):\n" +
+        "        return side\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("switch desugar: no diagnostics", sink.Diagnostics.Count == 0);
+    Check("switch desugar: whole switch becomes one BoundIf",
+        lowered.Functions[0].Body is [BoundIf]);
+    var outer = (BoundIf)lowered.Functions[0].Body[0];
+    Check("switch desugar: condition is a LoweredEnumTagCheck for 'circle'",
+        outer.Condition is LoweredEnumTagCheck { Case.Name: "circle" });
+    Check("switch desugar: matched branch binds 'radius' then returns it",
+        outer.Then is [BoundVariableDeclaration { Variable.Name: "radius" }, BoundReturn]);
+    Check("switch desugar: else branch is the next case's If, whose own else is empty (no default)",
+        outer.Else is [BoundIf { Condition: LoweredEnumTagCheck { Case.Name: "square" }, Else: [] }]);
+}
+
+{
+    // Guard fallthrough: a matched pattern whose `where` guard fails
+    // must fall through to the *next case*, not straight to default —
+    // verified by checking the documented shared-reference duplication
+    // (see Lowerer.BuildCaseChain's remarks) actually happens.
+    var lowered = LowerSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "}\n" +
+        "func classify(shape: Shape) -> String {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius) where radius > 10.0:\n" +
+        "        return \"big circle\"\n" +
+        "    case .circle(let radius):\n" +
+        "        return \"circle\"\n" +
+        "    default:\n" +
+        "        return \"other\"\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("guard fallthrough: no diagnostics", sink.Diagnostics.Count == 0);
+    var outer = (BoundIf)lowered.Functions[0].Body[0];
+    var inner = (BoundIf)outer.Then[0];
+    Check("guard fallthrough: guard check is nested inside the tag-matched branch",
+        inner.Condition is BoundBinary { Operator: BinaryOperator.Greater });
+    Check("guard fallthrough: a failed guard and a failed tag check share the exact same 'rest of chain' object",
+        ReferenceEquals(outer.Else, inner.Else));
+}
+
+{
+    // Switch nested inside an `if` still gets desugared — confirms
+    // LowerStatement recurses into BoundIf/BoundWhile bodies rather than
+    // only handling a switch that's directly a function's top-level
+    // statement.
+    var lowered = LowerSource(
+        "enum Shape { case circle(radius: Double) }\n" +
+        "func f(shape: Shape, flag: Bool) -> Int {\n" +
+        "    if flag {\n" +
+        "        switch shape {\n" +
+        "        case .circle(let r):\n" +
+        "            return 1\n" +
+        "        }\n" +
+        "    }\n" +
+        "    return 2\n" +
+        "}", out var sink);
+    Check("nested switch: no diagnostics", sink.Diagnostics.Count == 0);
+    Check("nested switch inside 'if' is desugared into a BoundIf too, not left as BoundSwitch",
+        lowered.Functions[0].Body is [BoundIf { Then: [BoundIf] }, BoundReturn]);
+}
+
+{
+    // Non-enum (Int) switch subject: ExpressionPattern lowers to a
+    // plain equality test, not an enum tag check.
+    var lowered = LowerSource(
+        "func classify(n: Int) -> String {\n" +
+        "    switch n {\n" +
+        "    case 1:\n" +
+        "        return \"one\"\n" +
+        "    default:\n" +
+        "        return \"other\"\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("Int switch: no diagnostics", sink.Diagnostics.Count == 0);
+    var outer = (BoundIf)lowered.Functions[0].Body[0];
+    Check("Int switch: case pattern lowers to an equality test, not an enum tag check",
+        outer.Condition is BoundBinary { Operator: BinaryOperator.Equal, Right: BoundIntegerLiteral { Value: 1 } });
+}
+
+{
+    // Comma-separated patterns with no bindings combine via a plain OR.
+    var lowered = LowerSource(
+        "func classify(n: Int) -> String {\n" +
+        "    switch n {\n" +
+        "    case 1, 2:\n" +
+        "        return \"small\"\n" +
+        "    default:\n" +
+        "        return \"other\"\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("comma patterns: no diagnostics", sink.Diagnostics.Count == 0);
+    var outer = (BoundIf)lowered.Functions[0].Body[0];
+    Check("comma patterns with no bindings combine via LogicalOr",
+        outer.Condition is BoundBinary { Operator: BinaryOperator.LogicalOr });
+}
+
+{
+    // Comma-separated patterns that each bind a (different) name are
+    // ambiguous — which binding would actually be in scope depends on
+    // which alternative matched — so Lowerer diagnoses rather than
+    // picking one arbitrarily.
+    var unit = ParseSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case square(side: Double)\n" +
+        "}\n" +
+        "func f(s: Shape) -> Double {\n" +
+        "    switch s {\n" +
+        "    case .circle(let x), .square(let y):\n" +
+        "        return 0.0\n" +
+        "    }\n" +
+        "}", out var parseSink);
+    var semanticSink = new InMemoryDiagnosticSink();
+    var bound = SemanticAnalyzer.Analyze(unit, semanticSink);
+    Check("ambiguous comma bindings: no semantic diagnostics (Binder doesn't check this)", semanticSink.Diagnostics.Count == 0, string.Join("; ", semanticSink.Diagnostics));
+    var lowerSink = new InMemoryDiagnosticSink();
+    new Lowerer(lowerSink).Lower(bound);
+    Check("ambiguous comma bindings (different names) across patterns is diagnosed by Lowerer", lowerSink.Diagnostics.Count > 0);
 }
 
 // ---------------------------------------------------------------------
