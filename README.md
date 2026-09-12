@@ -135,7 +135,7 @@ why, if you're wondering.
 
 ## Roadmap
 
-- [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 10 ADRs
+- [x] `docs/spec/grammar.md`, `type-system.md`, `memory-model.md` — first drafts complete, backed by 11 ADRs
 - [x] Lexer → working token stream (`src/Voyage.Compiler/Lexing/`), 46/46 checks passing
 - [x] Parser first milestone → `samples/hello.voy` round-trips to an AST dump (`src/Voyage.Compiler/Parsing/`), 67/67 checks passing across Lexing/ + Parsing/
 - [x] Parser: `let`/`var` bindings, binary/unary operators with full precedence table (`grammar.md`'s "Operator Precedence and Associativity", verified against Swift's real `precedencegroup` chain) — 91/91 checks passing
@@ -149,9 +149,14 @@ why, if you're wondering.
 - [x] Parser: richer type syntax — `[T]`, `(Int) -> Bool`, `Stack<Int>`, `any`/`some`, `Self` (all nesting freely) — 216/216 checks passing
 - [x] Parser: string interpolation (`"Hello, \(name)!"`), including nested calls and member access inside interpolations — 228/228 checks passing
 - [x] Parser: `switch` statements with real pattern matching (`.circle(let radius)`, wildcards, guards, nesting) — 248/248 checks passing
-- [ ] Parser: `for`-`in`
-- [ ] Semantic analysis (type checking, name resolution)
-- [ ] CIL code generation, first runnable `.voy` program
+
+**Strategy pivot (ADR-0011, "Minimal Pipeline Scope"):** rather than finishing every remaining `Parsing/` gap before starting `Semantics/`, the project now builds a full lexer → parser → semantics → lowering → codegen slice against a deliberately reduced barebones language subset first, then broadens one feature at a time — see the ADR for the full reasoning.
+
+- [x] Semantics/: name resolution and type checking for the ADR-0011 minimal subset — unlabeled calls, `let`/`var`, `if`/`while`/`break`/`continue`/`return`, stored-property-only `struct`/`enum`, string interpolation, `switch`/pattern matching over enums (`src/Voyage.Compiler/Semantics/`) — 276/276 checks passing across Lexing/ + Parsing/ + Semantics/
+- [ ] Lowering/: bound AST → IR for the same minimal subset
+- [ ] CodeGen/: IR → CIL via `System.Reflection.Emit`, first runnable `.voy` program
+- [ ] Broaden the minimal subset: labeled call arguments, `for`-in, generics instantiation, attributes, declaration modifiers, `associatedtype`, computed properties, array literals, `throws`/`try`/`catch`
+- [ ] `actor`/`task{}`/`atomic{}` semantics (ADR-0002/0006/0008) — deliberately last, per ADR-0011, as the hardest remaining language feature
 - [ ] `voyage` CLI: `build`, `run`, `repl`
 - [ ] NativeAOT publish pipeline across target RIDs (CI)
 - [ ] Language server (LSP) for editor support

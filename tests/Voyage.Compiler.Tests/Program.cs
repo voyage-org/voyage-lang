@@ -1,6 +1,7 @@
 using Voyage.Compiler.Diagnostics;
 using Voyage.Compiler.Lexing;
 using Voyage.Compiler.Parsing;
+using Voyage.Compiler.Semantics;
 
 var failures = 0;
 var passes = 0;
@@ -1777,6 +1778,179 @@ Console.WriteLine("=== switch statements and case patterns ===");
     var fn = unit.Statements[0] as FunctionDeclaration;
     Check("'switch' composes correctly as a statement inside a function body",
         fn?.Body is [SwitchStatement { Cases: [SwitchCase { Body: [ReturnStatement] }], DefaultBody: [ReturnStatement] }]);
+}
+
+// ---------------------------------------------------------------------
+// Semantics/ — ADR-0011 minimal pipeline scope
+// ---------------------------------------------------------------------
+
+BoundCompilationUnit BindSource(string source, out InMemoryDiagnosticSink sink)
+{
+    var unit = ParseSource(source, out var parseSink);
+    Check("no parse diagnostics for semantics test input", parseSink.Diagnostics.Count == 0, string.Join("; ", parseSink.Diagnostics));
+    sink = new InMemoryDiagnosticSink();
+    return SemanticAnalyzer.Analyze(unit, sink);
+}
+
+{
+    // hello.voy itself — the actual sample this whole minimal pipeline
+    // exists to eventually run. Confirms the built-in `print` signature
+    // and top-level statement binding both work together.
+    var bound = BindSource("print(\"Hello, Voyage.\")", out var sink);
+    Check("hello.voy: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("hello.voy: binds to one top-level call statement",
+        bound.TopLevelStatements is [BoundExpressionStatement { Expression: BoundCall { Function.Name: "print" } }]);
+}
+
+{
+    // A function calling another function declared *later* in the file
+    // — the concrete forward-reference case DeclarationBinder's two-pass
+    // split exists for.
+    var bound = BindSource(
+        "func a() -> Int { return b() }\n" +
+        "func b() -> Int { return 42 }", out var sink);
+    Check("forward reference: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("forward reference: both functions bound", bound.Functions.Count == 2);
+}
+
+{
+    // Arithmetic type-checking: matching numeric types succeed, and a
+    // real type mismatch (Int + Bool) is caught with ErrorType rather
+    // than silently accepted or crashing.
+    var bound = BindSource("func add(a: Int, b: Int) -> Int { return a + b }", out var sink);
+    Check("arithmetic: well-typed function has no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var body = bound.Functions[0].Body;
+    Check("arithmetic: 'a + b' binds with Int result type",
+        body is [BoundReturn { Value: BoundBinary { Operator: BinaryOperator.Add, Type: PrimitiveType { Name: "Int" } } }]);
+}
+
+{
+    var unit = ParseSource("func bad() -> Int { return 1 + true }", out var parseSink);
+    Check("type mismatch: parses fine (Semantics/'s job to catch it)", parseSink.Diagnostics.Count == 0);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("type mismatch: 'Int + Bool' is reported as a diagnostic", sink.Diagnostics.Count > 0);
+}
+
+{
+    // let/var, if/while, break/continue — the imperative core of the
+    // minimal subset, all composing inside one function body.
+    var bound = BindSource(
+        "func countdown(n: Int) -> Int {\n" +
+        "    var i = n\n" +
+        "    while i > 0 {\n" +
+        "        if i == 5 {\n" +
+        "            break\n" +
+        "        }\n" +
+        "        i = i - 1\n" +
+        "    }\n" +
+        "    return i\n" +
+        "}", out var sink);
+    Check("imperative core: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+}
+
+{
+    // break/continue outside a loop is caught, not silently accepted.
+    var unit = ParseSource("func f() { break }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("'break' outside a loop is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // Struct construction (implicit positional memberwise init) and
+    // stored-property read via member access.
+    var bound = BindSource(
+        "struct Point {\n" +
+        "    var x: Int\n" +
+        "    var y: Int\n" +
+        "}\n" +
+        "func magnitude(p: Point) -> Int {\n" +
+        "    return p.x + p.y\n" +
+        "}\n" +
+        "let origin = Point(0, 0)", out var sink);
+    Check("struct: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    Check("struct: construction binds as BoundStructConstruction",
+        bound.TopLevelStatements is [BoundVariableDeclaration { Initializer: BoundStructConstruction { Struct.Name: "Point" } }]);
+    Check("struct: property access binds to the right PropertySymbol",
+        bound.Functions[0].Body is [BoundReturn { Value: BoundBinary { Left: BoundPropertyAccess { Property.Name: "x" } } }]);
+}
+
+{
+    // Wrong arity/type on struct construction is caught.
+    var unit = ParseSource(
+        "struct Point { var x: Int\n var y: Int }\n" +
+        "let bad = Point(1)", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("struct: wrong argument count is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // enum + switch/pattern matching, including a binding pattern
+    // extracting an associated value.
+    var bound = BindSource(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case square(side: Double)\n" +
+        "}\n" +
+        "func area(shape: Shape) -> Double {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius):\n" +
+        "        return radius\n" +
+        "    case .square(let side):\n" +
+        "        return side\n" +
+        "    }\n" +
+        "}", out var sink);
+    Check("enum/switch: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+    var switchStmt = bound.Functions[0].Body[0] as BoundSwitch;
+    Check("enum/switch: subject binds with EnumType",
+        switchStmt?.Subject.Type is EnumType { Symbol.Name: "Shape" });
+    Check("enum/switch: case pattern resolves to the right EnumCaseSymbol",
+        switchStmt?.Cases[0].Patterns[0] is BoundEnumCasePattern { Case.Name: "circle" });
+}
+
+{
+    // Unknown enum case in a pattern is caught rather than silently
+    // matching nothing.
+    var unit = ParseSource(
+        "enum Shape { case circle(radius: Double) }\n" +
+        "func f(s: Shape) -> Double {\n" +
+        "    switch s {\n" +
+        "    case .triangle(let x):\n" +
+        "        return x\n" +
+        "    }\n" +
+        "}", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("unknown enum case in pattern is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // String interpolation type-checks its embedded expressions.
+    var bound = BindSource(
+        "func greet(name: String) -> String {\n" +
+        "    return \"Hello, \\(name)!\"\n" +
+        "}", out var sink);
+    Check("interpolation: no diagnostics", sink.Diagnostics.Count == 0, string.Join("; ", sink.Diagnostics));
+}
+
+{
+    // Undeclared name is caught with a clear diagnostic, not a crash.
+    var unit = ParseSource("func f() -> Int { return undeclaredName }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("undeclared identifier is diagnosed", sink.Diagnostics.Count > 0);
+}
+
+{
+    // Deferred-feature diagnostics: a bare `for`-in (UnsupportedStatement
+    // from Parsing/) is reported by Semantics/ too, rather than
+    // Semantics/ crashing on a node kind it's never seen.
+    var unit = ParseSource("func f() { for x in y { } }", out var parseSink);
+    var sink = new InMemoryDiagnosticSink();
+    SemanticAnalyzer.Analyze(unit, sink);
+    Check("an unparseable construct reaching Semantics/ is diagnosed, not a crash", sink.Diagnostics.Count > 0);
 }
 
 // ---------------------------------------------------------------------
