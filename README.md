@@ -153,8 +153,8 @@ why, if you're wondering.
 **Strategy pivot (ADR-0011, "Minimal Pipeline Scope"):** rather than finishing every remaining `Parsing/` gap before starting `Semantics/`, the project now builds a full lexer → parser → semantics → lowering → codegen slice against a deliberately reduced barebones language subset first, then broadens one feature at a time — see the ADR for the full reasoning.
 
 - [x] Semantics/: name resolution and type checking for the ADR-0011 minimal subset — unlabeled calls, `let`/`var`, `if`/`while`/`break`/`continue`/`return`, stored-property-only `struct`/`enum`, string interpolation, `switch`/pattern matching over enums (`src/Voyage.Compiler/Semantics/`) — 276/276 checks passing across Lexing/ + Parsing/ + Semantics/
-- [ ] Lowering/: bound AST → IR for the same minimal subset
-- [ ] CodeGen/: IR → CIL via `System.Reflection.Emit`, first runnable `.voy` program
+- [x] Lowering/: implicit-return injection (ADR-0005) and switch/pattern-match desugaring into `BoundIf` chains — transforms the bound tree in place rather than a separate IR hierarchy (`src/Voyage.Compiler/Lowering/`) — 313/313 checks passing across Lexing/ + Parsing/ + Semantics/ + Lowering/
+- [ ] CodeGen/: needs its own ADR first (enum CLR representation, in-process vs. persisted-assembly emission), then IR → CIL via `System.Reflection.Emit`, first runnable `.voy` program
 - [ ] Broaden the minimal subset: labeled call arguments, `for`-in, generics instantiation, attributes, declaration modifiers, `associatedtype`, computed properties, array literals, `throws`/`try`/`catch`
 - [ ] `actor`/`task{}`/`atomic{}` semantics (ADR-0002/0006/0008) — deliberately last, per ADR-0011, as the hardest remaining language feature
 - [ ] `voyage` CLI: `build`, `run`, `repl`
