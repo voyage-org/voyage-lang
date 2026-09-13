@@ -1,3 +1,5 @@
+using System.Reflection;
+using Voyage.Compiler.CodeGen;
 using Voyage.Compiler.Diagnostics;
 using Voyage.Compiler.Lexing;
 using Voyage.Compiler.Lowering;
@@ -2129,6 +2131,206 @@ BoundCompilationUnit LowerSource(string source, out InMemoryDiagnosticSink sink)
     var lowerSink = new InMemoryDiagnosticSink();
     new Lowerer(lowerSink).Lower(bound);
     Check("ambiguous comma bindings (different names) across patterns is diagnosed by Lowerer", lowerSink.Diagnostics.Count > 0);
+}
+
+// ---------------------------------------------------------------------
+// CodeGen/ — the actual payoff: compile source, run it, check output
+// ---------------------------------------------------------------------
+
+(Assembly Assembly, Type ProgramType) CompileAndLoad(string source, string assemblyName)
+{
+    var lowered = LowerSource(source, out var lowerSink);
+    Check("no lowering diagnostics for codegen test input", lowerSink.Diagnostics.Count == 0, string.Join("; ", lowerSink.Diagnostics));
+    return CodeGenerator.EmitInMemory(lowered, assemblyName);
+}
+
+{
+    // hello.voy itself, actually compiled and run — the concrete
+    // milestone ADR-0011 exists to reach. Redirection is scoped to just
+    // the Invoke call, not compilation — compilation runs its own
+    // Check()-based assertions (via CompileAndLoad's helpers), which
+    // would otherwise be captured into `writer` too.
+    var (_, programType) = CompileAndLoad("print(\"Hello, Voyage.\")", "HelloVoyageTest");
+
+    var originalOut = Console.Out;
+    var writer = new StringWriter();
+    Console.SetOut(writer);
+    try
+    {
+        programType.GetMethod("Main")!.Invoke(null, null);
+    }
+    finally
+    {
+        Console.SetOut(originalOut);
+    }
+    Check("hello.voy actually compiles and runs, printing the expected output", writer.ToString().TrimEnd() == "Hello, Voyage.", $"actual captured output: {writer}");
+}
+
+{
+    var (_, programType) = CompileAndLoad("func add(a: Int, b: Int) -> Int { return a + b }", "AddTest");
+    var result = (long)programType.GetMethod("add")!.Invoke(null, [3L, 4L])!;
+    Check("emitted function actually computes 3 + 4 = 7", result == 7);
+}
+
+{
+    // Struct construction (newobj on the generated memberwise
+    // constructor) and property read (ldfld), end to end.
+    var (_, programType) = CompileAndLoad(
+        "struct Point {\n" +
+        "    var x: Int\n" +
+        "    var y: Int\n" +
+        "}\n" +
+        "func sum(p: Point) -> Int { return p.x + p.y }", "StructTest");
+    var pointType = programType.Assembly.GetTypes().First(t => t.Name == "Point");
+    var pointInstance = Activator.CreateInstance(pointType, 3L, 4L);
+    var result = (long)programType.GetMethod("sum")!.Invoke(null, [pointInstance])!;
+    Check("struct construction + property read works end-to-end", result == 7);
+}
+
+{
+    // Enum construction via the per-case factory method (invoked
+    // directly via reflection — Semantics/ has no construction-binding
+    // rule yet, see ADR-0012's Consequences and CodeGen/README.md), then
+    // tag-check + associated-value access through a real pattern-
+    // matching function.
+    var (_, programType) = CompileAndLoad(
+        "enum Shape {\n" +
+        "    case circle(radius: Double)\n" +
+        "    case square(side: Double)\n" +
+        "}\n" +
+        "func area(shape: Shape) -> Double {\n" +
+        "    switch shape {\n" +
+        "    case .circle(let radius):\n" +
+        "        return radius * radius * 3.14159\n" +
+        "    case .square(let side):\n" +
+        "        return side * side\n" +
+        "    default:\n" +
+        "        return 0.0\n" +
+        "    }\n" +
+        "}", "EnumTest");
+    var shapeType = programType.Assembly.GetTypes().First(t => t.Name == "Shape");
+
+    var circleValue = shapeType.GetMethod("circle")!.Invoke(null, [2.0]);
+    var circleResult = (double)programType.GetMethod("area")!.Invoke(null, [circleValue])!;
+    Check("enum tag-check + associated-value access matches the 'circle' case correctly", Math.Abs(circleResult - (2.0 * 2.0 * 3.14159)) < 0.0001);
+
+    var squareValue = shapeType.GetMethod("square")!.Invoke(null, [5.0]);
+    var squareResult = (double)programType.GetMethod("area")!.Invoke(null, [squareValue])!;
+    Check("enum tag-check + associated-value access matches the 'square' case correctly, not falling into 'circle'", Math.Abs(squareResult - 25.0) < 0.0001);
+}
+
+{
+    // while loop + compound assignment (+=), which Lowering/ doesn't
+    // desugar — the read-modify-write expansion happens in CodeGen/
+    // itself (StatementEmitter.EmitCompoundOp).
+    var (_, programType) = CompileAndLoad(
+        "func sumDownTo(n: Int) -> Int {\n" +
+        "    var i = n\n" +
+        "    var total = 0\n" +
+        "    while i > 0 {\n" +
+        "        total += i\n" +
+        "        i = i - 1\n" +
+        "    }\n" +
+        "    return total\n" +
+        "}", "LoopTest");
+    var result = (long)programType.GetMethod("sumDownTo")!.Invoke(null, [5L])!;
+    Check("while loop + compound assignment: 5+4+3+2+1 = 15", result == 15);
+}
+
+{
+    // 'break' actually exits the loop at the right point.
+    var (_, programType) = CompileAndLoad(
+        "func firstOver(n: Int) -> Int {\n" +
+        "    var i = 0\n" +
+        "    while true {\n" +
+        "        i = i + 1\n" +
+        "        if i > n {\n" +
+        "            break\n" +
+        "        }\n" +
+        "    }\n" +
+        "    return i\n" +
+        "}", "BreakTest");
+    var result = (long)programType.GetMethod("firstOver")!.Invoke(null, [3L])!;
+    Check("'break' exits the loop exactly when expected", result == 4);
+}
+
+{
+    // String interpolation: pairwise Concat, no ToString needed (every
+    // segment is already String-typed by the time Binder allows it).
+    var (_, programType) = CompileAndLoad("func greet(name: String) -> String { return \"Hello, \\(name)!\" }", "InterpTest");
+    var result = (string)programType.GetMethod("greet")!.Invoke(null, ["Voyage"])!;
+    Check("string interpolation concatenates correctly", result == "Hello, Voyage!");
+}
+
+{
+    // String equality must be VALUE equality (string.op_Equality), not
+    // reference identity (raw ceq) — constructing the argument string at
+    // runtime via char array guarantees it's not the same object as any
+    // interned literal in the emitted method.
+    var (_, programType) = CompileAndLoad("func isHello(s: String) -> Bool { return s == \"hello\" }", "StringEqTest");
+    var dynamicString = new string(['h', 'e', 'l', 'l', 'o']);
+    var result = (bool)programType.GetMethod("isHello")!.Invoke(null, [dynamicString])!;
+    Check("string equality compares by value, not by reference identity", result);
+}
+
+{
+    // && must short-circuit: if it didn't, evaluating (100 / n) with
+    // n=0 would throw DivideByZeroException.
+    var (_, programType) = CompileAndLoad("func safeCheck(n: Int) -> Bool { return n != 0 && (100 / n) > 1 }", "ShortCircuitAndTest");
+    Exception? thrown = null;
+    object? resultZero = null;
+    try { resultZero = programType.GetMethod("safeCheck")!.Invoke(null, [0L]); }
+    catch (TargetInvocationException ex) { thrown = ex.InnerException; }
+    Check("'&&' short-circuits: no exception and a correct 'false' result when the left operand is false", thrown is null && resultZero is false);
+
+    var resultTen = (bool)programType.GetMethod("safeCheck")!.Invoke(null, [10L])!;
+    Check("'&&' still evaluates the right operand when the left is true (100/10=10 > 1)", resultTen);
+}
+
+{
+    // || must also short-circuit: a true left operand should skip the
+    // right operand entirely (100 / 0 would otherwise throw).
+    var (_, programType) = CompileAndLoad("func safeCheck(n: Int) -> Bool { return n == 0 || (100 / n) > 1 }", "ShortCircuitOrTest");
+    var resultZero = (bool)programType.GetMethod("safeCheck")!.Invoke(null, [0L])!;
+    Check("'||' short-circuits: no exception and a correct 'true' result when the left operand is already true", resultZero);
+}
+
+{
+    // The persisted-assembly path (ADR-0012 Decision 1) through the
+    // real pipeline, not just the hand-written research script that
+    // originally verified the API — save to a real file, reload via a
+    // fresh Assembly.LoadFile, and confirm it runs correctly.
+    var lowered = LowerSource("print(\"Persisted works.\")", out var lowerSink);
+    Check("persisted test: no lowering diagnostics", lowerSink.Diagnostics.Count == 0, string.Join("; ", lowerSink.Diagnostics));
+
+    var tempPath = Path.Combine(Path.GetTempPath(), $"VoyagePersistTest_{Guid.NewGuid():N}.dll");
+    try
+    {
+        CodeGenerator.EmitToFile(lowered, "PersistTest", tempPath);
+        Check("persisted assembly file was actually written to disk", File.Exists(tempPath));
+
+        var loaded = Assembly.LoadFile(tempPath);
+        var programType = loaded.GetType("Program")!;
+        var originalOut = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            programType.GetMethod("Main")!.Invoke(null, null);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+        Check("persisted-and-reloaded assembly runs correctly in a genuinely separate load context", writer.ToString().TrimEnd() == "Persisted works.");
+    }
+    finally
+    {
+        if (File.Exists(tempPath))
+        {
+            File.Delete(tempPath);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------

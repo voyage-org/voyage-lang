@@ -154,7 +154,7 @@ why, if you're wondering.
 
 - [x] Semantics/: name resolution and type checking for the ADR-0011 minimal subset — unlabeled calls, `let`/`var`, `if`/`while`/`break`/`continue`/`return`, stored-property-only `struct`/`enum`, string interpolation, `switch`/pattern matching over enums (`src/Voyage.Compiler/Semantics/`) — 276/276 checks passing across Lexing/ + Parsing/ + Semantics/
 - [x] Lowering/: implicit-return injection (ADR-0005) and switch/pattern-match desugaring into `BoundIf` chains — transforms the bound tree in place rather than a separate IR hierarchy (`src/Voyage.Compiler/Lowering/`) — 313/313 checks passing across Lexing/ + Parsing/ + Semantics/ + Lowering/
-- [ ] CodeGen/: architecture decided (ADR-0012 — `PersistedAssemblyBuilder` for real runnable output, enum-as-CLR-struct representation, direct bound-tree walk), implementation not yet started; first runnable `.voy` program is the payoff milestone
+- [x] CodeGen/: IR → CIL via `System.Reflection.Emit`, per ADR-0012 (`src/Voyage.Compiler/CodeGen/`) — **the first `.voy`-equivalent programs actually compile and run**, verified via real execution (arithmetic, structs, enum construction/pattern matching, loops, compound assignment, string interpolation, short-circuit operators) and a genuinely persisted, independently-loadable `.dll` — 360/360 checks passing across the whole pipeline
 - [ ] Broaden the minimal subset: labeled call arguments, `for`-in, generics instantiation, attributes, declaration modifiers, `associatedtype`, computed properties, array literals, `throws`/`try`/`catch`
 - [ ] `actor`/`task{}`/`atomic{}` semantics (ADR-0002/0006/0008) — deliberately last, per ADR-0011, as the hardest remaining language feature
 - [ ] `voyage` CLI: `build`, `run`, `repl`
