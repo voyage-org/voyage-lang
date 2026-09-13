@@ -13,7 +13,16 @@ public abstract record TypeSymbol
 {
     public abstract string Name { get; }
 
-    public override string ToString() => Name;
+    // `sealed` matters here, not just style: without it, every derived
+    // record (PrimitiveType, StructType, ...) synthesizes its own
+    // default record ToString() ("PrimitiveType { Name = Int }")
+    // regardless of this override — a C# records quirk (each record
+    // type gets its own synthesized ToString() unless sealed further
+    // up the hierarchy prevents it). Found for real via Voyage.Cli's
+    // diagnostic output actually rendering that ugly form instead of
+    // plain "Int" — no earlier test inspected diagnostic message text,
+    // only counted diagnostics, so this was invisible until now.
+    public sealed override string ToString() => Name;
 }
 
 /// <summary>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>voyage</AssemblyName>
+    <RootNamespace>Voyage.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Voyage.Compiler\Voyage.Compiler.csproj" />
+  </ItemGroup>
+
+</Project>

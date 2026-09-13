@@ -43,6 +43,19 @@ diagnostic branches for exactly which construct maps to which message.
 
 ## What's still open
 
+- **No way to convert `Int`/`Double`/`Bool` to `String` at all** —
+  `print` only accepts a `String` argument, and string interpolation
+  only accepts already-`String`-typed segments (see
+  `Binder.BindInterpolationSegment`'s remarks): there's no
+  `CustomStringConvertible`-style protocol, and no `String(someInt)`-
+  style conversion initializer either. Concretely, this means no
+  currently-expressible voyage-lang program can print a computed number
+  — only a literal or interpolated string. Found via actually writing
+  and running real `.voy` programs through `Voyage.Cli`, not something
+  any existing test caught (every test's `print`/interpolation calls
+  happened to only ever use string values already). A real, near-term
+  gap to close — likely the most user-visible one in the minimal
+  subset.
 - **Struct/enum methods** aren't supported — only stored properties
   (`struct`) and cases (`enum`) resolve; a `func` nested inside either is
   diagnosed as unsupported. Blocked in part on the same computed-property/

@@ -2311,6 +2311,21 @@ BoundCompilationUnit LowerSource(string source, out InMemoryDiagnosticSink sink)
 
         var loaded = Assembly.LoadFile(tempPath);
         var programType = loaded.GetType("Program")!;
+
+        // The actual CLR entry point, not just a method reflection can
+        // find and invoke directly — `Invoke` below would succeed even
+        // without a real entry point set (a real gap this exact check
+        // is here to catch: EmitToFile originally used
+        // PersistedAssemblyBuilder.Save() alone, which produces a
+        // loadable assembly with no entry point token at all, so
+        // `dotnet <output>.dll` failed with "Entry point not found"
+        // despite this test passing — found only by actually running
+        // the CLI's build output the way a person would, not by this
+        // suite. This assertion is what closes that gap for future
+        // regressions.)
+        Check("persisted assembly has a real CLR entry point set, not just an invokable Main method",
+            loaded.EntryPoint is not null && loaded.EntryPoint.Name == "Main" && loaded.EntryPoint.DeclaringType == programType);
+
         var originalOut = Console.Out;
         var writer = new StringWriter();
         Console.SetOut(writer);

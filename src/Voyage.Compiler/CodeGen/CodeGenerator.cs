@@ -1,5 +1,8 @@
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using Voyage.Compiler.Semantics;
 
 namespace Voyage.Compiler.CodeGen;
@@ -25,10 +28,22 @@ namespace Voyage.Compiler.CodeGen;
 /// <see cref="StatementEmitter"/>, <see cref="ExpressionEmitter"/>) —
 /// only how the final assembly is realized differs:
 ///
-/// - <see cref="EmitInMemory"/> — fast, in-process, for tests.
+/// - <see cref="EmitInMemory"/> — fast, in-process, for tests. `Main` is
+///   invoked directly via reflection, so no CLR-level entry point needs
+///   to be set.
 /// - <see cref="EmitToFile"/> — a genuinely persisted, independently
-///   runnable assembly, verified end-to-end against the real SDK before
-///   ADR-0012 was written.
+///   runnable assembly. Getting this right needed more than
+///   <c>PersistedAssemblyBuilder.Save(path)</c> alone: that call
+///   produces a loadable assembly, but with no CLR entry point token
+///   set, so <c>dotnet &lt;output&gt;.dll</c> fails with "Entry point
+///   not found" — found for real by actually trying to run
+///   `voyage build`'s output the way a person would (via the
+///   <c>Voyage.Cli</c> project), not just checking the file exists.
+///   The documented fix is lower-level: generate the metadata
+///   separately via <c>GenerateMetadata</c>, then build the PE image
+///   directly via <see cref="ManagedPEBuilder"/> with an explicit
+///   <c>entryPoint</c> token pointing at the emitted <c>Main</c>
+///   method.
 /// </summary>
 public static class CodeGenerator
 {
@@ -36,7 +51,7 @@ public static class CodeGenerator
     {
         var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
         var moduleBuilder = assemblyBuilder.DefineDynamicModule("MainModule");
-        var programType = Emit(unit, moduleBuilder);
+        var (programType, _) = Emit(unit, moduleBuilder);
         return (assemblyBuilder, programType);
     }
 
@@ -44,11 +59,24 @@ public static class CodeGenerator
     {
         var persistedBuilder = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
         var moduleBuilder = persistedBuilder.DefineDynamicModule("MainModule");
-        Emit(unit, moduleBuilder);
-        persistedBuilder.Save(outputPath);
+        var (_, mainMethod) = Emit(unit, moduleBuilder);
+
+        var metadataBuilder = persistedBuilder.GenerateMetadata(out var ilStream, out var fieldData);
+        var peBuilder = new ManagedPEBuilder(
+            header: PEHeaderBuilder.CreateExecutableHeader(),
+            metadataRootBuilder: new MetadataRootBuilder(metadataBuilder),
+            ilStream: ilStream,
+            mappedFieldData: fieldData,
+            entryPoint: MetadataTokens.MethodDefinitionHandle(mainMethod.MetadataToken));
+
+        var peBlob = new BlobBuilder();
+        peBuilder.Serialize(peBlob);
+
+        using var fileStream = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
+        peBlob.WriteContentTo(fileStream);
     }
 
-    private static Type Emit(BoundCompilationUnit unit, ModuleBuilder moduleBuilder)
+    private static (Type ProgramType, MethodBuilder MainMethod) Emit(BoundCompilationUnit unit, ModuleBuilder moduleBuilder)
     {
         var ctx = new CodeGenContext(moduleBuilder);
 
@@ -77,9 +105,10 @@ public static class CodeGenerator
             EmitFunctionBody(ctx, function);
         }
 
-        EmitMain(ctx, programType, unit.TopLevelStatements);
+        var mainMethod = EmitMain(ctx, programType, unit.TopLevelStatements);
+        var builtType = programType.CreateType();
 
-        return programType.CreateType();
+        return (builtType, mainMethod);
     }
 
     private static void EmitFunctionBody(CodeGenContext ctx, BoundFunctionDeclaration function)
@@ -118,7 +147,7 @@ public static class CodeGenerator
         il.Emit(OpCodes.Ret);
     }
 
-    private static void EmitMain(CodeGenContext ctx, TypeBuilder programType, IReadOnlyList<BoundStatement> topLevelStatements)
+    private static MethodBuilder EmitMain(CodeGenContext ctx, TypeBuilder programType, IReadOnlyList<BoundStatement> topLevelStatements)
     {
         var mainMethod = programType.DefineMethod("Main", MethodAttributes.Public | MethodAttributes.Static, typeof(void), Type.EmptyTypes);
         var il = mainMethod.GetILGenerator();
@@ -127,5 +156,7 @@ public static class CodeGenerator
         StatementEmitter.EmitStatements(ctx, method, topLevelStatements);
 
         il.Emit(OpCodes.Ret);
+
+        return mainMethod;
     }
 }
