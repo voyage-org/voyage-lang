@@ -71,6 +71,17 @@ malformed-but-otherwise-valid user input.
   operand may have side effects (or, per this phase's own test suite,
   a division that would otherwise throw) that must not run when
   short-circuiting applies.
+- **A loaded persisted assembly is file-locked for the process's
+  lifetime on Windows** (not on Linux/macOS) — `Assembly.LoadFile`
+  memory-maps the `.dll`, and Windows won't allow deleting an open
+  file. Encountered for real: the test suite's own cleanup of its
+  persisted-assembly test's temp file threw
+  `UnauthorizedAccessException` on Windows despite passing cleanly on
+  Linux, fixed by making that cleanup best-effort (see the test itself
+  for the fix). Worth keeping in mind for the future `voyage` CLI's
+  `build` command too — anything that loads its own freshly-emitted
+  output for verification, then wants to overwrite or delete it in the
+  same process, will hit this on Windows.
 
 ## What's still open
 

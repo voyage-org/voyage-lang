@@ -2326,9 +2326,25 @@ BoundCompilationUnit LowerSource(string source, out InMemoryDiagnosticSink sink)
     }
     finally
     {
-        if (File.Exists(tempPath))
+        // Best-effort cleanup only: Assembly.LoadFile locks the file
+        // for the lifetime of the process on Windows (no equivalent
+        // restriction on Linux/macOS), so deletion can fail here even
+        // though the test itself already passed by this point — that
+        // failure shouldn't crash the whole suite. A leftover temp file
+        // is harmless; the OS reclaims its temp directory eventually
+        // either way.
+        try
         {
-            File.Delete(tempPath);
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 }
